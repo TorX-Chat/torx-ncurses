@@ -1,0 +1,21 @@
+[Desktop Entry]
+Version=1.0
+Name=TorX Ncurses
+GenericName=Internet Messenger
+Exec=torx-ncurses
+Terminal=false
+Type=Application
+Icon=org.torx.ncurses
+StartupWMClass=TorX
+Comment=A chat software for those on the Interpol Red List
+Categories=Network;InstantMessaging;Chat;
+Keywords=Internet;Tor;InstantMessaging;Chat;
+X-MultipleArgs=false
+StartupNotify=true
+X-GNOME-UsesNotifications=true
+## Overview: https://wiki.archlinux.org/title/Desktop_entries#Basics
+## Localization: https://developer-old.gnome.org/integration-guide/stable/desktop-files.html.en
+## Test config --> desktop-file-validate org.torx.ncurses.desktop
+## Place icon in --> /usr/share/pixmaps		&&	/usr/share/icons/hicolor/48x48/apps/org.gnome.TorX.png or ~/.icons/
+## Place in -->  ~/.local/share/applications/
+## Then run --> update-desktop-database -v ~/.local/share/applications
