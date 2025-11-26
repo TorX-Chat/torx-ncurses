@@ -61,7 +61,7 @@ severable if found in contradiction with the License or applicable law.
 */
 #include <torx.h>
 
-#define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.36 2025/11/25 by TorX\n© Copyright 2025 TorX.\n"
+#define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.37 2025/11/26 by TorX\n© Copyright 2025 TorX.\n"
 
 static struct t_peer_list {
 	char *unsent;
@@ -302,6 +302,11 @@ static void create_windows(void)
 //		draw_chat(global_n); // XXX Currently must be called only by chat_input_loop.
 }
 
+/* static void widget_checkbox(text,toggle_function,arg)
+{ // Should have a global_index, and each new widget should be registered globally with its type, callback function, and arg?
+
+} */
+
 static void draw_password(void)
 { // Password Route
 	if(!pw_win)
@@ -421,7 +426,7 @@ static void draw_list(void)
 				break;
 			const uint8_t sendfd_connected = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,sendfd_connected));
 			const uint8_t recvfd_connected = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,recvfd_connected));
-			char *peernick = getter_string(NULL,n,INT_MIN,-1,offsetof(struct peer_list,peernick));
+			char *peernick = getter_string(n,INT_MIN,-1,offsetof(struct peer_list,peernick));
 			char label[256]; // zero'd
 			if(t_peer[n].unread > 0)
 				snprintf(label, sizeof(label), "(%lu) %s", t_peer[n].unread, peernick);
@@ -476,7 +481,7 @@ static inline size_t print_message(int *visual_idx,size_t *draw_y,const uint8_t 
 	const size_t inner_w = screen_cols - 2;
 	if(utf8 && null_terminated_len)
 	{
-		char *message = getter_string(NULL,n,i,-1,offsetof(struct message_list,message));
+		char *message = getter_string(n,i,-1,offsetof(struct message_list,message));
 		if(!message) // this would be a bug?
 			return lines_printed;
 		if(*visual_idx >= first_line_index && *visual_idx <= bottom_line_index)
@@ -505,7 +510,7 @@ static inline size_t get_lines(const int n,const int i,const size_t inner_w)
 	pthread_rwlock_unlock(&mutex_protocols); // 🟩
 	if(utf8 && null_terminated_len)
 	{
-		char *message = getter_string(NULL,n,i,-1,offsetof(struct message_list,message));
+		char *message = getter_string(n,i,-1,offsetof(struct message_list,message));
 		lines = 1 + index_to_visual_simple(NULL,NULL,inner_w,message,torx_allocation_len(message) - null_terminated_len - date_len - signature_len);
 		torx_free((void*)&message);
 	}
@@ -530,7 +535,7 @@ static void draw_chat(const int n)
 	}
 	else if(t_peer[n].unsent_pos >= torx_allocation_len(t_peer[n].unsent))
 		t_peer[n].unsent_pos = torx_allocation_len(t_peer[n].unsent) - 1;
-	char *peernick = getter_string(NULL,n,INT_MIN,-1,offsetof(struct peer_list,peernick));
+	char *peernick = getter_string(n,INT_MIN,-1,offsetof(struct peer_list,peernick));
 	mvwprintw_size(chat_msgs_win,0,2,"%s",peernick);
 	torx_free((void*)&peernick);
 	getmaxyx_size(chat_msgs_win, &screen_rows, &screen_cols); // necessary
@@ -1160,7 +1165,7 @@ static int settings_chat_loop(const int n)
 	WINDOW *dlg = newwin_size(h, w, y, x);
 	keypad(dlg, TRUE);
 	int focus = 0;
-	char *peernick = getter_string(NULL,n,INT_MIN,-1,offsetof(struct peer_list,peernick));
+	char *peernick = getter_string(n,INT_MIN,-1,offsetof(struct peer_list,peernick));
 	const sig_atomic_t seen = resize_seq;
 	while(1)
 	{
