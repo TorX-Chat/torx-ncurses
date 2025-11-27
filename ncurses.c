@@ -61,7 +61,7 @@ severable if found in contradiction with the License or applicable law.
 */
 #include <torx.h>
 
-#define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.37 2025/11/26 by TorX\n© Copyright 2025 TorX.\n"
+#define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.38 2025/11/26 by TorX\n© Copyright 2025 TorX.\n"
 
 static struct t_peer_list {
 	char *unsent;
