@@ -66,7 +66,7 @@ severable if found in contradiction with the License or applicable law.
 static struct t_peer_list {
 	char *unsent;
 	size_t unsent_pos; // cursor position
-	size_t unread;
+	size_t unread; // unread message count
 	int pm_n;
 	int edit_n;
 	int edit_i;
@@ -96,32 +96,44 @@ static inline void initialize_library(void (*callback)(void))
 #define minimum_size_horizontal 20 // Do not eliminate this or we have to go back to using int instead of size_t and checking for negative values
 #define minimum_size_vertical 2
 
+static void signal_resize(int sig);
+static void draw_login(void);
+static void draw_contacts(void);
+static void draw_chat(const int n);
+static int await_key_or_signal(WINDOW *win);
+void async_notifier(void);
+
 enum {
 	KEY_DELETE = 330,
 	KEY_ESC = 27
 };
-
-enum {
-	PAGE_PASSWORD,
-	PAGE_CONTACTS,
-	PAGE_CHAT,
-	PAGE_SETTINGS
+enum widget_types {
+	WIDGET_PASSWORD,
+	WIDGET_INPUT_SINGLE_LINE,
+	WIDGET_INPUT_MULTI_LINE,
+	WIDGET_INPUT_NUMERICAL, // unused
+	WIDGET_CHECKBOX
+// TODO how will we handle scrolled windows? As a widget or not?
 };
 
-static void signal_resize(int sig);
-static void create_windows(void);
-static void draw_password(void);
-static void draw_list(void);
-static void draw_chat(const int n);
-static int await_key_or_signal(WINDOW *win);
-void async_notifier(void);
-static int chat_input_loop(const int n);
-static void draw_settings(void);
-static int settings_loop(void);
-static int settings_chat_loop(const int n);
-static int actions_chat_loop(const int n);
+static struct widget {
+	// Consider saving start_y and start_x so we can re-draw individual widgets rather than the while route (especially applicable to checkbox/toggle.
+	int type;
+	int (*callback)(const size_t,const int); // typically holds the functionality to be executed upon ENTER press
+	char **text;
+	size_t *cursor;
+} * widget = {0}; // REMEMBER to free this list whenever changing a page. Remember to initialize new widgets with zero_w
 
-static WINDOW *main_win = NULL, *list_win = NULL, *chat_msgs_win = NULL, *chat_input_win = NULL, *pw_win = NULL, *settings_win = NULL;
+// XXX START One required for each route START XXX
+static WINDOW *window_contacts = NULL, *window_chat = NULL, *window_input = NULL, *window_login = NULL;
+
+static size_t *current_focus = NULL; // XXX must be set otherwise we will dereference a NULL very quick! XXX
+static size_t focus_login = 0;
+static size_t focus_contacts = 0;
+static size_t focus_chat = 0;
+// XXX END One required for each route END XXX
+
+static size_t cursor[2] = {0}; // y,x
 
 static int selected_n = 0; // internal use only
 static int global_n = -1;
@@ -131,31 +143,20 @@ static volatile sig_atomic_t resize_seq = 0;
 static bool running = true; // set to false to exit
 static int sig_num = 0;
 
-static size_t screen_rows = 24, screen_cols = 80;
+static size_t screen_rows = 24, screen_cols = 80; // this will be set on startup and resize
 
-static int notify_fds[2] = { -1, -1 };
+static int notify_fds[2] = { -1, -1 }; // triggered by library callbacks, indicating that a UI call to cb_buffer is requested
 
-static int window = PAGE_PASSWORD; // must start at PAGE_PASSWORD
 static size_t chat_scroll_lines = 0;
 
 /* Password window state */
 static char *password = NULL;
 static bool pw_show = false; // default false
-static size_t pw_focus = 0;
 static size_t pw_cursor = 0;
 
 /* Contact list state */
 static bool groups_mode = false;
-static size_t list_focus = 0;
 static size_t list_first_peer_w = 0; // This facilitates left-right navigation between peerlist and settings buttons
-static int chat_btn_focus = 0; // 0=input,1=settings,2=actions
-
-/* Settings window state */
-#define SETTINGS_COUNT 4
-static bool settings_toggle[SETTINGS_COUNT] = { false, true, false, false };
-static char settings_text[128] = {0};
-static size_t settings_text_len = 0;
-static size_t settings_focus_idx = 0;
 
 static void signal_resize(int sig)
 { // Do not call ncurses functions directly from here
@@ -208,14 +209,14 @@ static inline size_t print_wrapped(WINDOW *win,size_t *y,size_t *x,const size_t 
 			mvwaddch(win, (int)*y, (int)*x, (chtype)str[iter]);
 			*x = *x + 1;
 		}
-error_printf(0,"Checkpoint wraps: %lu",*y - start_y);
+		error_printf(0,"Checkpoint wraps: %lu",*y - start_y);
 		return *y - start_y; // may be 0 if no wraps or newlines occurred during printing
 	}
 	return 0;
 }
 
 static inline void getmaxyx_size(WINDOW *win,size_t *vertical,size_t *horizontal)
-{ // Strip out ability to return -1 or values below our minimum_size_*
+{ // TODO Test stripping out ability to values below minimum_size_*
 	if(!win)
 	{
 		error_simple(0,"getmaxyx_size issue. UI Coding error. Report this.");
@@ -233,88 +234,17 @@ static inline void getmaxyx_size(WINDOW *win,size_t *vertical,size_t *horizontal
 		*horizontal = (size_t)x;
 }
 
-static void destroy_windows(void)
-{
-	#define destroy_window(window) if(window) { delwin(window); window = NULL; }
-	destroy_window(main_win)
-	destroy_window(list_win)
-	destroy_window(chat_msgs_win)
-	destroy_window(chat_input_win)
-	destroy_window(pw_win)
-	destroy_window(settings_win)
-}
-
-static void create_windows(void)
-{
-	destroy_windows();
-	getmaxyx_size(stdscr, &screen_rows, &screen_cols);
-	main_win = newwin_size(screen_rows, screen_cols, 0, 0);
-
-	if(window == PAGE_PASSWORD)
-	{
-		size_t h = 11, w = screen_cols - 4, y = (screen_rows - h) / 2, x = 2;
-		if(h >= screen_rows)
-		{
-			h = screen_rows;
-			y = 0;
-		}
-		pw_win = newwin_size(h, w, y, x);
-		keypad(pw_win, TRUE);
-	}
-	else if(window == PAGE_CONTACTS)
-	{
-		list_win = newwin_size(screen_rows, screen_cols, 0, 0);
-		keypad(list_win, TRUE);
-	}
-	else if(window == PAGE_SETTINGS)
-	{
-		const size_t h = screen_rows - 4, w = screen_cols - 8, y = 2, x = 4;
-		settings_win = newwin_size(h, w, y, x);
-		keypad(settings_win, TRUE);
-	}
+static void redraw(void)
+{ // Do not do anything other than calling draw_* here. Do it in individual draw_* functions so that they can be called independently of this function.
+	if(window_login)
+		draw_login();
+	else if(window_contacts)
+		draw_contacts();
+	else if(window_chat)
+		draw_chat(global_n);
 	else
-	{
-		size_t input_h = 3;
-		size_t msgs_h = screen_rows - input_h;
-		if(msgs_h < 3)
-		{
-			msgs_h = 3;
-			input_h = screen_rows - msgs_h;
-		}
-		chat_msgs_win = newwin_size(msgs_h, screen_cols, 0, 0);
-		chat_input_win = newwin_size(input_h, screen_cols, msgs_h, 0);
-		keypad(chat_input_win, TRUE);
-		keypad(chat_msgs_win, TRUE);
-	}
-	if(window == PAGE_CHAT)
-		curs_set(1);
-	else
-		curs_set(0);
-	// draw active window
-	if(window == PAGE_PASSWORD)
-		draw_password();
-	else if(window == PAGE_CONTACTS)
-		draw_list();
-	else if(window == PAGE_SETTINGS)
-		draw_settings();
-//	else if(window == PAGE_CHAT)
-//		draw_chat(global_n); // XXX Currently must be called only by chat_input_loop.
+		error_simple(0,"Failing to redraw unknown window");
 }
-
-static size_t cursor[2] = {0};
-
-enum widget_types {
-	WIDGET_PASSWORD,
-	WIDGET_CHECKBOX
-};
-
-static struct widget {
-	// Consider saving start_y and start_x so we can re-draw individual widgets rather than the while route (especially applicable to checkbox/toggle.
-	int type;
-	int (*callback)(const int);
-//	void (*callback)(void*);
-//	void *callback_arg;
-} * widget = {0}; // REMEMBER to free this list whenever changing a page
 
 static void widget_set_cursor(const size_t y,const size_t x)
 { // Internal function only. All text widgets should call this if they need to show a cursor.
@@ -322,29 +252,47 @@ static void widget_set_cursor(const size_t y,const size_t x)
 	cursor[1] = x;
 }
 
-static size_t widget_new(const int type,int (*callback)(const int))
+static void zero_w(const size_t w)
+{
+	if(widget && w < torx_allocation_len(widget) / sizeof(struct widget))
+	{ // sanity check
+		widget[w].text = NULL; // Do not null or free underlying pointer
+		widget[w].cursor = NULL; // Do not null or free underlying pointer
+		widget[w].callback = NULL;
+		widget[w].type = 0;
+	}
+}
+
+static size_t widget_new(const int type)
 { // Internal function only
 	if(widget)
 		widget = torx_realloc(widget,torx_allocation_len(widget)+sizeof(struct widget));
 	else
 		widget = torx_insecure_malloc(sizeof(struct widget));
 	const size_t w = torx_allocation_len(widget) / sizeof(struct widget) - 1;
-	widget[w].callback = callback;
+	zero_w(w);
 	widget[w].type = type;
 	return w;
 }
 
-static void widget_clear(void)
-{ // Must call first when drawing a new route
+static void widget_clear(size_t *new_focus)
+{ // Must call first when drawing a new route, and on shutdown
+	#define destroy_window(win) if(win) { delwin(win); win = NULL; }
+	destroy_window(window_contacts)
+	destroy_window(window_chat)
+	destroy_window(window_input)
+	destroy_window(window_login)
+	if(new_focus)
+	{ // We're preparing to draw a new window
+		getmaxyx_size(stdscr, &screen_rows, &screen_cols); // 2nd
+		current_focus = new_focus;
+		widget_set_cursor(0,0); // set to a safe place
+		curs_set(0); // set invisible
+	}
 	const size_t active_widgets = torx_allocation_len(widget) / sizeof(struct widget);
 	for(size_t w = 0; w < active_widgets; w++)
-	{
-		widget[w].callback = NULL;
-		widget[w].type = 0;
-	}
+		zero_w(w);
 	torx_free((void*)&widget);
-	widget_set_cursor(0,0); // set to a safe place
-	curs_set(0); // set invisible
 }
 
 static void widget_draw_cursor(WINDOW *win)
@@ -353,19 +301,20 @@ static void widget_draw_cursor(WINDOW *win)
 	wrefresh(win);
 }
 
-static size_t widget_button(WINDOW *win,size_t *y,size_t *x,const size_t inner_width,const size_t current_focus,int (*callback)(const int),const char *text)
+static size_t widget_button(WINDOW *win,size_t *y,size_t *x,const size_t inner_width,int (*callback)(const size_t,const int),const char *text)
 { // Draw a button
-	const size_t w = widget_new(WIDGET_CHECKBOX,callback);
+	const size_t w = widget_new(WIDGET_CHECKBOX);
+	widget[w].callback = callback;
 	const size_t text_len = text ? strlen(text) : 0;
-	if(current_focus == w)
+	if(*current_focus == w)
 		wattron(win, A_REVERSE); // highlight on
 	print_wrapped(win,y,x,inner_width,text,text_len);
-	if(current_focus == w)
+	if(*current_focus == w)
 		wattroff(win, A_REVERSE); // highlight off
 	return w;
 }
 
-static size_t widget_checkbox(WINDOW *win,size_t *y,size_t *x,const size_t inner_width,const size_t current_focus,int (*callback)(const int),const uint8_t reversed,const char *text,const uint8_t ticked)
+static size_t widget_checkbox(WINDOW *win,size_t *y,size_t *x,const size_t inner_width,int (*callback)(const size_t,const int),const uint8_t reversed,const char *text,const uint8_t ticked)
 { // Draw a checkbox button
 	const size_t text_len = text ? strlen(text) : 0;
 	char array[text_len + 4 + 1];
@@ -373,30 +322,39 @@ static size_t widget_checkbox(WINDOW *win,size_t *y,size_t *x,const size_t inner
 		snprintf(array, sizeof(array), "[%c] %s",ticked ? 'x':' ',text);
 	else
 		snprintf(array, sizeof(array), "%s [%c]",text,ticked ? 'x':' ');
-	const size_t w = widget_button(win,y,x,inner_width,current_focus,callback,array);
+	const size_t w = widget_button(win,y,x,inner_width,callback,array);
 	sodium_memzero(array,sizeof(array));
 	return w;
 }
 
-static size_t widget_password(WINDOW *win,size_t *y,size_t *x,const size_t inner_width,const size_t current_focus,int (*callback)(const int),const uint8_t show,const char *pass,const size_t cursor_pos)
-{ // Draw a password entry
-	const size_t w = widget_new(WIDGET_PASSWORD,callback);
+static size_t widget_text_entry(WINDOW *win,size_t *y,size_t *x,const size_t inner_width,int (*callback)(const size_t,const int),const int type,char **text_p,size_t *cursor_pos)
+{ // Draw a text entry. Single-line SHOULD highlight when selected. Multi-line should NOT highlight when selected.
+	if(type != WIDGET_PASSWORD && type != WIDGET_INPUT_SINGLE_LINE && type != WIDGET_INPUT_MULTI_LINE && type != WIDGET_INPUT_NUMERICAL)
+	{
+		error_simple(-1,"widget_text_entry passed an inappropriate type. UI coding error. Report this.");
+		return 0;
+	}
+	const size_t w = widget_new(type);
+	widget[w].callback = callback;
+	widget[w].text = text_p;
+	widget[w].cursor = cursor_pos;
 	const size_t start_y = *y, start_x = *x;
-	const size_t password_len = pass ? strlen(pass) : 0;
-	char array[password_len + 1]; // zero'd
-	if(show)
-		snprintf(array,sizeof(array),"%s",pass);
-	else
+	const size_t text_len = (text_p && *text_p) ? strlen(*text_p) : 0;
+	char array[text_len + 1]; // zero'd
+	if(!pw_show && type == WIDGET_PASSWORD)
 		memset(array,'*',sizeof(array)-1);
-	array[password_len] = '\0';
-	if(current_focus == w)
+	else
+		snprintf(array,sizeof(array),"%s",*text_p);
+	array[text_len] = '\0';
+	if(*current_focus == w && type != WIDGET_INPUT_MULTI_LINE)
 		wattron(win, A_REVERSE); // highlight on
 	print_wrapped(win,y,x,inner_width,array,sizeof(array)-1);
-	if(current_focus == w)
+	if(*current_focus == w)
 	{
-		wattroff(win, A_REVERSE); // highlight off
+		if(type != WIDGET_INPUT_MULTI_LINE)
+			wattroff(win, A_REVERSE); // highlight off
 		size_t vrow, vcol;
-		index_to_visual_simple(&vrow, &vcol, inner_width - (start_x - 1), pass, cursor_pos); // XXX inner_width - (start_x - 1) is critical
+		index_to_visual_simple(&vrow, &vcol, inner_width - (start_x - 1), *text_p, cursor_pos ? *cursor_pos : 0); // XXX inner_width - (start_x - 1) is critical
 		widget_set_cursor(start_y + vrow, start_x + vcol);
 		curs_set(1);
 	}
@@ -406,91 +364,218 @@ static size_t widget_password(WINDOW *win,size_t *y,size_t *x,const size_t inner
 	return w;
 }
 
-static int callback_password(const int ch)
-{ // TODO need to pass a struct with password, pw_cursor, whatever else
-	if(ch == KEY_LEFT)
-	{
-		if(pw_cursor > 0)
-			pw_cursor--;
-		else
-		{
-			beep();
-			return 0; // Do not rebuild
-		}
-	}
-	else if(ch == KEY_RIGHT)
-	{
-		if(pw_cursor + 1 < torx_allocation_len(password))
-			pw_cursor++;
-		else
-		{
-			beep();
-			return 0; // Do not rebuild
-		}
-	}
-	else if(ch == KEY_DELETE)
-	{
-		if(pw_cursor + 1 < torx_allocation_len(password))
-		{
-			const size_t prior_allocation_len = torx_allocation_len(password);
-			memmove(&password[pw_cursor], &password[pw_cursor+1], prior_allocation_len - pw_cursor - 1);
-			password = torx_realloc(password,prior_allocation_len-1); // after memmove
-		}
-		else
-		{
-			beep();
-			return 0; // Do not rebuild
-		}
-	}
-	else if(ch == KEY_BACKSPACE || ch == 127 || ch == 8)
-	{
-		if(pw_cursor)
-		{ // TODO permit unlimited lengths
-			const size_t prior_allocation_len = torx_allocation_len(password);
-			memmove(&password[pw_cursor-1], &password[pw_cursor], prior_allocation_len - pw_cursor);
-			password = torx_realloc(password,prior_allocation_len-1); // after memmove
-			pw_cursor--;
-		}
-		else
-		{
-			beep();
-			return 0; // Do not rebuild
-		}
-	}
-	else if(ch == '\n' || ch == KEY_ENTER)
+static int callback_password(const size_t w,const int ch)
+{
+	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
 	{
 		const uint8_t lockout_local = threadsafe_read_uint8(&mutex_global_variable,&lockout);
 		if(!lockout_local)
 		{
-			login_start(password);
-			torx_free((void*)&password);
-			pw_cursor = 0; // must reset when freeing password
+			login_start(*widget[w].text);
+			torx_free((void*)&*widget[w].text);
+			*widget[w].cursor = 0; // must reset when freeing password
 		}
-	}
-	else if(ch >= 32 && ch <= 126)
-	{
-		if(!password) // first character
-		{
-			password = torx_secure_malloc(2);
-			password[pw_cursor + 1] = '\0';
-		}
-		else
-		{ // Subsequent characters
-			const size_t prior_allocation_len = torx_allocation_len(password);
-			password = torx_realloc(password,prior_allocation_len+1); // before memmove
-			memmove(&password[pw_cursor+1], &password[pw_cursor], prior_allocation_len - pw_cursor);
-		}
-		password[pw_cursor] = (char)ch;
-		pw_cursor++;
 	}
 	else
 		return 0; // Do not rebuild
 	return 1; // Rebuild
 }
 
-static int callback_censored_region(const int ch)
+static int keypress(const size_t w,const int ch)
+{ // replace with callback_message_input ?
+	if(w >= torx_allocation_len(widget) / sizeof(struct widget) /*|| !widget[w].cursor || !widget[w].text*/)
+	{
+		error_printf(0,"Keypress called on possibly invalid widget: %lu of %lu",w,torx_allocation_len(widget) / sizeof(struct widget));
+		return 0; // Sanity check
+	}
+error_printf(0,"Checkpoint keypress: %d",ch);
+	const size_t inner_w = screen_cols - 2;
+	if(ch == KEY_ESC || ch == KEY_HOME)
+	{ // Go back or exit
+		if(window_login || window_contacts)
+			running = false;
+		else if(window_chat)
+		{
+			global_n = -1;
+			draw_contacts();
+		}
+		else
+			error_printf(0,"No window to navigate to. Possible coding error.");
+	}
+	else if(ch == '\t' || ch == KEY_BTAB)
+	{
+		*current_focus = (*current_focus + 1) % (torx_allocation_len(widget) / sizeof(struct widget));
+error_printf(0,"Checkpoint rebuild current_focus: %lu",*current_focus);
+		return 1; // Rebuild
+	}
+	else if(ch == KEY_UP)
+	{
+		if(widget[w].type == WIDGET_INPUT_MULTI_LINE)
+		{
+			const size_t unsent_len = torx_allocation_len(*widget[w].text) ? torx_allocation_len(*widget[w].text) - 1 : 0;
+			size_t r,c2;
+			index_to_visual_simple(&r, &c2, inner_w, *widget[w].text, *widget[w].cursor);
+			if(r == 0)
+			{
+				*widget[w].cursor = 0;
+				return 1;
+			}
+			size_t best = 0;
+			for(size_t iter = 0; iter <= unsent_len; ++iter)
+			{
+				size_t rr,cc;
+				index_to_visual_simple(&rr, &cc, inner_w, *widget[w].text, iter);
+				if(rr == r-1)
+				{
+					best = iter;
+					break;
+				}
+			}
+			size_t avail = 0;
+			while(best + avail <= unsent_len)
+			{
+				size_t rr,cc;
+				index_to_visual_simple(&rr, &cc, inner_w, *widget[w].text, best + avail);
+				if(rr != r-1)
+					break;
+				avail++;
+			}
+			if(c2 > avail)
+				c2 = avail;
+			*widget[w].cursor = best + c2;
+		}
+		else if(*current_focus > 0)
+			*current_focus = *current_focus - 1;
+		return 1; // Rebuild
+	}
+	else if(ch == KEY_DOWN)
+	{
+		if(widget[w].type == WIDGET_INPUT_MULTI_LINE)
+		{
+			const size_t unsent_len = torx_allocation_len(*widget[w].text) ? torx_allocation_len(*widget[w].text) - 1 : 0;
+			size_t r,c2;
+			index_to_visual_simple(&r, &c2, inner_w, *widget[w].text, *widget[w].cursor);
+			const size_t total_vis = index_to_visual_simple(NULL,NULL,inner_w,*widget[w].text,torx_allocation_len(*widget[w].text)-1);
+			if(r >= total_vis - 1)
+			{
+				*widget[w].cursor = unsent_len;
+				return 1;
+			}
+			int first = -1;
+			for(size_t iter = 0; iter <= unsent_len; ++iter)
+			{
+				size_t rr,cc;
+				index_to_visual_simple(&rr, &cc, inner_w, *widget[w].text, iter);
+				if(rr == r+1)
+				{
+					first = (int)iter;
+					break;
+				}
+			}
+			if(first < 0)
+			{
+				*widget[w].cursor = unsent_len;
+				return 1;
+			}
+			const size_t first_cast = (size_t)first;
+			size_t avail = 0;
+			while(first_cast + avail <= unsent_len)
+			{
+				size_t rr,cc;
+				index_to_visual_simple(&rr, &cc, inner_w, *widget[w].text, first_cast + avail);
+				if(rr != r+1)
+					break;
+				avail++;
+			}
+			if(c2 > avail)
+				c2 = avail;
+			*widget[w].cursor = first_cast + c2;
+		}
+		else if(*current_focus < torx_allocation_len(widget) / sizeof(struct widget) - 1)
+			*current_focus = *current_focus + 1;
+		return 1; // Rebuild
+	}
+	else if(ch == KEY_LEFT)
+	{
+error_simple(0,"Checkpoint left 1");
+		if(window_contacts)
+		{
+			focus_contacts = list_first_peer_w;
+			return 1; // Rebuild
+		}
+		else if(widget[w].cursor && *widget[w].cursor > 0)
+		{
+error_simple(0,"Checkpoint left 2");
+			*widget[w].cursor = *widget[w].cursor - 1;
+error_simple(0,"Checkpoint left 3");
+			return 1; // Rebuild
+		}
+error_simple(0,"Checkpoint left beep");
+		beep();
+	}
+	else if(ch == KEY_RIGHT)
+	{
+		if(window_contacts)
+		{
+			focus_contacts = (focus_contacts + 1) % list_first_peer_w;
+			return 1; // Rebuild
+		}
+		else if(widget[w].cursor && widget[w].text && *widget[w].cursor + 1 < torx_allocation_len(*widget[w].text))
+		{
+			*widget[w].cursor = *widget[w].cursor + 1;
+			return 1; // Rebuild
+		}
+		beep();
+	}
+	else if(ch == KEY_DELETE)
+	{
+		if(widget[w].cursor && widget[w].text && *widget[w].cursor + 1 < torx_allocation_len(*widget[w].text))
+		{
+			const size_t prior_allocation_len = torx_allocation_len(*widget[w].text);
+			memmove(&(*widget[w].text)[*widget[w].cursor], &(*widget[w].text)[*widget[w].cursor+1], prior_allocation_len - *widget[w].cursor - 1);
+			*widget[w].text = torx_realloc(*widget[w].text,prior_allocation_len-1); // after memmove
+			return 1; // Rebuild
+		}
+		beep();
+	}
+	else if(ch == KEY_BACKSPACE || ch == 127 || ch == 8)
+	{
+		if(widget[w].cursor && widget[w].text && *widget[w].cursor)
+		{
+			const size_t prior_allocation_len = torx_allocation_len(*widget[w].text);
+			memmove(&(*widget[w].text)[*widget[w].cursor-1], &(*widget[w].text)[*widget[w].cursor], prior_allocation_len - *widget[w].cursor);
+			*widget[w].text = torx_realloc(*widget[w].text,prior_allocation_len-1); // after memmove
+			*widget[w].cursor = *widget[w].cursor - 1;
+			return 1; // Rebuild
+		}
+		beep();
+	}
+	else if(ch >= 32 && ch <= 126 && widget[w].cursor && widget[w].text)
+	{ // Applicable to text widgets only. Captures space but NOT enter.
+		if(!*widget[w].text) // first character
+		{
+			*widget[w].text = torx_secure_malloc(2);
+			(*widget[w].text)[*widget[w].cursor + 1] = '\0';
+		}
+		else
+		{ // Subsequent characters
+			const size_t prior_allocation_len = torx_allocation_len(*widget[w].text);
+			*widget[w].text = torx_realloc(*widget[w].text,prior_allocation_len+1); // before memmove
+			memmove(&(*widget[w].text)[*widget[w].cursor+1], &(*widget[w].text)[*widget[w].cursor], prior_allocation_len - *widget[w].cursor);
+		}
+		(*widget[w].text)[*widget[w].cursor] = (char)ch;
+		*widget[w].cursor = *widget[w].cursor + 1;
+		return 1; // Rebuild
+	}
+	else if(widget[w].callback)
+		return widget[w].callback(w,ch);
+	return 0; // Do not rebuild
+}
+
+static int callback_censored_region(const size_t w,const int ch)
 {
-	if(ch == '\n' || ch == KEY_ENTER || ch == ' ')
+	(void)w;
+	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
 	{
 		uint8_t censored_region_local = threadsafe_read_uint8(&mutex_global_variable,&censored_region);
 		if(censored_region_local == 0)
@@ -511,53 +596,49 @@ static int callback_censored_region(const int ch)
 	return 1; // Rebuild
 }
 
-static int callback_pw_show(const int ch)
+static int callback_pw_show(const size_t w,const int ch)
 {
-	if(ch == '\n' || ch == KEY_ENTER || ch == ' ')
+	(void)w;
+	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
 		pw_show = !pw_show;
 	else
 		return 0; // Do not rebuild
 	return 1; // Rebuild
 }
 
-static void draw_password(void)
+static void draw_login(void)
 { // Password Route
-	if(!pw_win)
-	{
-		error_simple(0,"pw_win does not exist. UI Coding error. Report this.");
-		return;
-	}
-	widget_clear(); // XXX Must do first
-	werase(pw_win);
-	box(pw_win,0,0);
-	getmaxyx_size(pw_win, &screen_rows, &screen_cols);
+	widget_clear(&focus_login); // XXX Must do first
+	window_login = newwin_size(screen_rows, screen_cols, 0, 0);
+	box(window_login,0,0); // Draw border
 
 	size_t fy = 0, fx = 2;
 	char text_enter_password[] = " Welcome to TorX ";
-	print_wrapped(pw_win, &fy,&fx,screen_cols-4,text_enter_password,sizeof(text_enter_password)-1);
+	print_wrapped(window_login, &fy,&fx,screen_cols-4,text_enter_password,sizeof(text_enter_password)-1);
 	char text_password[] = "Password:";
 	fy += 2, fx = 2; // fy must be += because there might be wrap
-	print_wrapped(pw_win,&fy,&fx,screen_cols-fx,text_password,sizeof(text_password)-1);
+	print_wrapped(window_login,&fy,&fx,screen_cols-fx,text_password,sizeof(text_password)-1);
 
 	fy += 1, fx = 4; // fy must be += because there might be wrap
-	widget_password(pw_win,&fy,&fx,screen_cols-fx,pw_focus,callback_password,pw_show,password,pw_cursor);
+	widget_text_entry(window_login,&fy,&fx,screen_cols-fx,callback_password,WIDGET_PASSWORD,&password,&pw_cursor);
 
 	fy += 2,fx = 4; // fy must be += because there might be wrap
-	widget_checkbox(pw_win,&fy,&fx,screen_cols-fx,pw_focus,callback_pw_show,1,"Show Password",pw_show);
+	widget_checkbox(window_login,&fy,&fx,screen_cols-fx,callback_pw_show,1,"Show Password",pw_show);
 
 	fy += 1, fx = 4;
-	widget_checkbox(pw_win,&fy,&fx,screen_cols-fx,pw_focus,callback_censored_region,1,"Censored Region",threadsafe_read_uint8(&mutex_global_variable,&censored_region));
+	widget_checkbox(window_login,&fy,&fx,screen_cols-fx,callback_censored_region,1,"Censored Region",threadsafe_read_uint8(&mutex_global_variable,&censored_region));
 
 	const char text_password_help[] = "Tab: cycle focus  Up/Down: move focus  Enter: proceed  Esc/Home: quit";
 	fy = screen_rows-2, fx = 2;
-	print_wrapped(pw_win, &fy, &fx, screen_cols-fx, text_password_help, sizeof(text_password_help)-1);
+	print_wrapped(window_login, &fy, &fx, screen_cols-fx, text_password_help, sizeof(text_password_help)-1);
 
-	widget_draw_cursor(pw_win); // XXX Must do last
+	widget_draw_cursor(window_login); // XXX Must do last
 }
 
-static int callback_contacts_groups(const int ch)
+static int callback_contacts_groups(const size_t w,const int ch)
 {
-	if(ch == '\n' || ch == KEY_ENTER || ch == ' ')
+	(void)w;
+	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
 	{
 		groups_mode = !groups_mode;
 		list_first_peer_w = 0;
@@ -567,51 +648,36 @@ static int callback_contacts_groups(const int ch)
 	return 1;
 }
 
-static int callback_settings(const int ch)
+static int callback_peer(const size_t w,const int ch)
 {
-	if(ch == '\n' || ch == KEY_ENTER || ch == ' ')
+	(void)w;
+	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
 	{
-		window = PAGE_SETTINGS;
-		create_windows();
-	}
-	return 0;
-}
-
-static int callback_peer(const int ch)
-{
-	if(ch == '\n' || ch == KEY_ENTER || ch == ' ')
-	{
-		window = PAGE_CHAT;
 		global_n = selected_n;
 		t_peer[global_n].unread = 0;
 		chat_scroll_lines = 0;
-		//	create_windows(); // currently redundant because chat_input_loop is called on the next loop, which calls draw_chat
+		draw_chat(global_n);
 	}
 	return 0;
 }
 
-static void draw_list(void)
+static void draw_contacts(void)
 { // Contact List Route
-	if(!list_win)
-	{
-		error_simple(0,"list_win does not exist. UI Coding error. Report this.");
-		return;
-	}
-	widget_clear(); // XXX Must do first
-	werase(list_win);
-	box(list_win,0,0);
-	if(!groups_mode)
-		mvwprintw_size(list_win,0,2," Contacts ");
+	widget_clear(&focus_contacts); // XXX Must do first
+	window_contacts = newwin_size(screen_rows, screen_cols, 0, 0);
+	box(window_contacts,0,0); // Draw border
+	if(groups_mode)
+		mvwprintw_size(window_contacts,0,2," Groups ");
 	else
-		mvwprintw_size(list_win,0,2," Groups ");
+		mvwprintw_size(window_contacts,0,2," Contacts ");
 
 	const char *groups_label = groups_mode ? "[ Contacts ]" : "[ Groups ]";
 	size_t fy = 0,fx = screen_cols - strlen(groups_label) - 3;
-	widget_button(list_win,&fy,&fx,screen_cols-2,list_focus,callback_contacts_groups,groups_label);
+	widget_button(window_contacts,&fy,&fx,screen_cols-2,callback_contacts_groups,groups_label);
 
 	const char settings_label[] = "[ Settings ]";
 	fy += 1,fx = screen_cols - (sizeof(settings_label) - 1) - 3;
-	widget_button(list_win,&fy,&fx,screen_cols-2,list_focus,callback_settings,settings_label);
+	widget_button(window_contacts,&fy,&fx,screen_cols-2,NULL,settings_label); // TODO set a callback
 
 	int len = 0;
 	int *array;
@@ -637,14 +703,14 @@ static void draw_list(void)
 			else
 				snprintf(label, sizeof(label), "%s%s", (sendfd_connected || recvfd_connected) ? "* ":"", peernick);
 			if(sendfd_connected || recvfd_connected)
-				wattron(list_win,A_BOLD); // bold on
-			const size_t w = widget_button(list_win,&fy,&fx,screen_cols-2,list_focus,callback_peer,label);
+				wattron(window_contacts,A_BOLD); // bold on
+			const size_t w = widget_button(window_contacts,&fy,&fx,screen_cols-2,callback_peer,label);
 			if(!pos)
 				list_first_peer_w = w;
-			if(list_focus == w)
+			if(focus_contacts == w)
 				selected_n = array[pos];
 			if(sendfd_connected || recvfd_connected)
-				wattroff(list_win,A_BOLD); // bold off
+				wattroff(window_contacts,A_BOLD); // bold off
 			sodium_memzero(label,sizeof(label));
 			torx_free((void*)&peernick);
 		}
@@ -653,9 +719,9 @@ static void draw_list(void)
 
 	const char text_list_help[] = "Up/Down: select  Enter/Space: open  Esc/Home: quit  Tab: cycle focus";
 	fy = screen_rows-2, fx = 2;
-	print_wrapped(list_win, &fy, &fx, screen_cols-fx, text_list_help, sizeof(text_list_help)-1);
+	print_wrapped(window_contacts, &fy, &fx, screen_cols-fx, text_list_help, sizeof(text_list_help)-1);
 
-	widget_draw_cursor(list_win); // XXX Must do last
+	widget_draw_cursor(window_contacts); // XXX Must do last
 }
 
 static inline size_t print_message(int *visual_idx,size_t *draw_y,const uint8_t owner,const int n,const int i,const int first_line_index,const int bottom_line_index)
@@ -689,7 +755,7 @@ static inline size_t print_message(int *visual_idx,size_t *draw_y,const uint8_t 
 		if(*visual_idx >= first_line_index && *visual_idx <= bottom_line_index)
 		{ // we only ACTUALLY print it if it is within the visual zone
 			size_t start_x = 1;
-			lines_printed += 1 + print_wrapped(chat_msgs_win,draw_y,&start_x,inner_w,message,torx_allocation_len(message) - null_terminated_len - date_len - signature_len);
+			lines_printed += 1 + print_wrapped(window_chat,draw_y,&start_x,inner_w,message,torx_allocation_len(message) - null_terminated_len - date_len - signature_len);
 			*draw_y = *draw_y + 1;
 		}
 		*visual_idx = *visual_idx + 1;
@@ -719,16 +785,158 @@ static inline size_t get_lines(const int n,const int i,const size_t inner_w)
 	return lines;
 }
 
-static void draw_chat(const int n)
-{ // Chat Route. XXX Currently must be called only by chat_input_loop.
-	#define TOP_LINE_HEIGHT 1
-	if(!chat_msgs_win)
+static int callback_message_input(const size_t w,const int ch)
+{
+	(void)w;
+	const int n = global_n;
+	const size_t inner_w = screen_cols - 2;
+	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
 	{
-		error_simple(0,"chat_msgs_win does not exist. UI Coding error. Report this.");
-		return;
+		const size_t unsent_len = torx_allocation_len(t_peer[n].unsent) ? torx_allocation_len(t_peer[n].unsent) - 1 : 0;
+		if(!unsent_len)
+			return 0; // ignore it
+		else if(t_peer[n].unsent_pos == unsent_len)
+		{ // send message
+			int g = -1;
+			uint8_t g_invite_required = 0;
+			const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+			if(owner == ENUM_OWNER_GROUP_CTRL)
+			{
+				g = set_g(n,NULL);
+				g_invite_required = getter_group_uint8(g,offsetof(struct group_list,invite_required));
+			}
+			if(owner == ENUM_OWNER_GROUP_CTRL && g_invite_required) // date && sign private group messages
+				message_send(n,ENUM_PROTOCOL_UTF8_TEXT_DATE_SIGNED,t_peer[n].unsent,torx_allocation_len(t_peer[n].unsent)-1);
+			else // regular messages, private messages (in authenticated pipes), public messages in public groups (in authenticated pipes)
+				message_send(n,ENUM_PROTOCOL_UTF8_TEXT,t_peer[n].unsent,torx_allocation_len(t_peer[n].unsent)-1);
+			torx_free((void*)&t_peer[n].unsent);
+			t_peer[n].unsent_pos = 0;
+			chat_scroll_lines = 0;
+		}
+		else
+		{ // insert newline at cursor
+			t_peer[n].unsent = torx_realloc(t_peer[n].unsent, torx_allocation_len(t_peer[n].unsent) + 1);
+			const size_t rem = unsent_len - t_peer[n].unsent_pos;
+			memmove(&t_peer[n].unsent[t_peer[n].unsent_pos+1], &t_peer[n].unsent[t_peer[n].unsent_pos], rem + 1);
+			t_peer[n].unsent[t_peer[n].unsent_pos] = '\n';
+			t_peer[n].unsent_pos++;
+		}
 	}
-	werase(chat_msgs_win);
-	box(chat_msgs_win,0,0);
+	else if(ch == KEY_PPAGE)
+	{ // PgUp
+		size_t mh;
+		getmaxyx_size(window_chat, &mh, &screen_cols);
+		size_t inner_h = mh - minimum_size_vertical;
+		if(inner_h < 1)
+			inner_h = 1;
+		const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+		int min_i,max_i,msg_count,g;
+		struct msg_list *page;
+		if(owner == ENUM_OWNER_GROUP_CTRL)
+		{
+			g = set_g(n,NULL);
+			pthread_rwlock_rdlock(&mutex_expand_group); // 🟧
+			page = group[g].msg_first;
+			msg_count = (int)group[g].msg_count;
+			pthread_rwlock_unlock(&mutex_expand_group); // 🟩
+		}
+		else
+		{
+			max_i = getter_int(n,INT_MIN,-1,offsetof(struct peer_list,max_i));
+			min_i = getter_int(n,INT_MIN,-1,offsetof(struct peer_list,min_i));
+			msg_count = max_i + 1 - min_i;
+		}
+		size_t total_visual_lines = 0;
+		if(msg_count)
+		{
+			if(owner == ENUM_OWNER_GROUP_CTRL)
+				while(page)
+				{
+					total_visual_lines += get_lines(page->n,page->i,inner_w);
+					page = page->message_next;
+				}
+			else
+				for(int i = min_i; i <= max_i; i++)
+					total_visual_lines += get_lines(n,i,inner_w);
+		}
+		else
+			total_visual_lines = 1;
+		const size_t max_scroll = (total_visual_lines > inner_h) ? (total_visual_lines - inner_h) : 0;
+		if(chat_scroll_lines < max_scroll)
+		{
+			chat_scroll_lines = chat_scroll_lines + inner_h;
+			if(chat_scroll_lines > max_scroll)
+				chat_scroll_lines = max_scroll;
+		}
+	}
+	else if(ch == KEY_NPAGE)
+	{ // PgDn
+		size_t mh;
+		getmaxyx_size(window_chat, &mh, &screen_cols);
+		size_t inner_h = mh - minimum_size_vertical;
+		if(inner_h < 1)
+			inner_h = 1;
+		if(chat_scroll_lines >= inner_h)
+			chat_scroll_lines -= inner_h;
+		else
+			chat_scroll_lines = 0;
+	}
+	else if(ch == KEY_END)
+		chat_scroll_lines = 0;
+	else
+		return 0;
+	return 1;
+}
+
+static void draw_chat(const int n)
+{ // Chat Route
+	if(n < 0)
+	{
+		error_simple(0,"draw_chat called on invalid n. UI coding error. Report this.");
+		return; // Bug
+	}
+	widget_clear(&focus_chat); // XXX Must do first
+
+	size_t input_h = 3;
+	size_t msgs_h = screen_rows - input_h;
+	if(msgs_h < 3)
+	{
+		msgs_h = 3;
+		input_h = screen_rows - msgs_h;
+	}
+	window_chat = newwin_size(msgs_h, screen_cols, 0, 0);
+	window_input = newwin_size(input_h, screen_cols, msgs_h, 0);
+
+	box(window_chat,0,0); // Draw border
+
+	getmaxyx_size(stdscr, &screen_rows, &screen_cols); // necessary
+	const size_t inner_w = screen_cols - 2;
+	size_t cur_row = 0, cur_col = 0;
+	size_t visual_lines = 1 + index_to_visual_simple(&cur_row, &cur_col, inner_w, t_peer[n].unsent, torx_allocation_len(t_peer[n].unsent)); // alt: t_peer[n].unsent_pos
+	size_t max_input_lines = screen_rows - 5;
+	if(screen_rows < 6)
+		max_input_lines = 1;
+	if(visual_lines > max_input_lines)
+		visual_lines = max_input_lines;
+	size_t desired_input_h = visual_lines + 2;
+	if(desired_input_h < 3)
+		desired_input_h = 3;
+	msgs_h = screen_rows - desired_input_h;
+	size_t cur_msgs_h = 0, cur_msgs_w = 0;
+	if(window_chat)
+		getmaxyx_size(window_chat, &cur_msgs_h, &cur_msgs_w);
+	if(!window_chat || cur_msgs_h != msgs_h || cur_msgs_w != screen_cols)
+	{ // Grow message input box
+		if(window_chat)
+			delwin(window_chat);
+		if(window_input)
+			delwin(window_input);
+		window_chat = newwin_size(msgs_h, screen_cols, 0, 0);
+		window_input = newwin_size(desired_input_h, screen_cols, msgs_h, 0);
+	}
+
+	#define TOP_LINE_HEIGHT 1
+
 	if(!t_peer[n].unsent)
 	{ // Necessary
 		t_peer[n].unsent = torx_secure_malloc(1);
@@ -738,11 +946,9 @@ static void draw_chat(const int n)
 	else if(t_peer[n].unsent_pos >= torx_allocation_len(t_peer[n].unsent))
 		t_peer[n].unsent_pos = torx_allocation_len(t_peer[n].unsent) - 1;
 	char *peernick = getter_string(n,INT_MIN,-1,offsetof(struct peer_list,peernick));
-	mvwprintw_size(chat_msgs_win,0,2,"%s",peernick);
+	mvwprintw_size(window_chat,0,2,"%s",peernick);
 	torx_free((void*)&peernick);
-	getmaxyx_size(chat_msgs_win, &screen_rows, &screen_cols); // necessary
 	const size_t inner_h = screen_rows - minimum_size_vertical;
-	const size_t inner_w = screen_cols - 2;
 	int total_visual_lines = 0;
 	const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
 	int min_i,max_i,msg_count,g;
@@ -808,42 +1014,72 @@ error_printf(0,"Checkpoint anticipated=%lu actual=%lu",total_visual_lines,actual
 	const size_t b2len = sizeof(btn2) - 1;
 	const size_t b2x = screen_cols - b2len - 3;
 	const size_t b1x = b2x - b1len - 1;
-	if(chat_btn_focus == 1)
-		wattron(chat_msgs_win, A_REVERSE);
-	mvwprintw_size(chat_msgs_win, 0, b1x, "%s", btn1);
-	if(chat_btn_focus == 1)
-		wattroff(chat_msgs_win, A_REVERSE);
-	if(chat_btn_focus == 2)
-		wattron(chat_msgs_win, A_REVERSE);
-	mvwprintw_size(chat_msgs_win, 0, b2x, "%s", btn2);
-	if(chat_btn_focus == 2)
-		wattroff(chat_msgs_win, A_REVERSE);
-	wrefresh(chat_msgs_win);
+	if(focus_chat == 1)
+		wattron(window_chat, A_REVERSE);
+	mvwprintw_size(window_chat, 0, b1x, "%s", btn1);
+	if(focus_chat == 1)
+		wattroff(window_chat, A_REVERSE);
+	if(focus_chat == 2)
+		wattron(window_chat, A_REVERSE);
+	mvwprintw_size(window_chat, 0, b2x, "%s", btn2);
+	if(focus_chat == 2)
+		wattroff(window_chat, A_REVERSE);
+	wrefresh(window_chat);
 
-	werase(chat_input_win);
-	box(chat_input_win, 0, 0);
+	box(window_input, 0, 0); // Draw border
 	const char hint[] = " Type message (Enter to send at end, Esc/Home: back, PgUp/PgDn: scroll) ";
-	mvwprintw_size(chat_input_win, 0, 2, "%.*s",(int)screen_cols - 4, hint); // do not wrap
+	mvwprintw_size(window_input, 0, 2, "%.*s",(int)screen_cols - 4, hint); // do not wrap
+
+
+		const size_t unsent_len = torx_allocation_len(t_peer[n].unsent) ? torx_allocation_len(t_peer[n].unsent) - 1 : 0;
+		size_t start_x = 1,row = 1;
+		print_wrapped(window_input,&row,&start_x,inner_w,t_peer[n].unsent,unsent_len);
+
+		// cursor visibility
+		if(focus_chat != 0)
+		{
+			curs_set(0);
+			wrefresh(window_input);
+		}
+		else
+		{
+			size_t vrow, vcol;
+			index_to_visual_simple(&vrow, &vcol, inner_w,t_peer[n].unsent, t_peer[n].unsent_pos);
+			if(vrow >= visual_lines)
+				vrow = visual_lines - 1;
+			size_t cursy = 1 + vrow;
+			size_t cursx = 1 + vcol;
+			size_t input_h_cur;
+			getmaxyx_size(window_input, &input_h_cur, &screen_cols);
+			if(cursy >= input_h_cur)
+				cursy = input_h_cur - 1;
+			wmove_size(window_input, cursy, cursx);
+			curs_set(1);
+		}
+		wrefresh(window_input);
+
+
+	widget_draw_cursor(window_input); // XXX Must do last
 }
 
 static int await_key_or_signal(WINDOW *win)
 { // Blocks on select(), awaiting keypress or callback.
 	fd_set rfds;
-	int stdin_fd = fileno(stdin);
-	int notify_rd = notify_fds[0];
-	if(stdin_fd < 0)
-		stdin_fd = -1;
-	if(notify_rd < 0)
-		notify_rd = -1;
+	const int stdin_fd = fileno(stdin);
+	const int notify_rd = notify_fds[0];
+	if(stdin_fd < 0 || notify_rd < 0)
+	{ // Fail
+		error_simple(0,"stdin_fd or notify_rd failed. Coding error. Report this.");
+		running = false;
+		return -1;
+	}
 	while(1)
 	{
 		if(resized)
-			return -1;
+			return -1; // Not a bug
 		FD_ZERO(&rfds);
-		if(stdin_fd >= 0)
-			FD_SET(stdin_fd, &rfds);
-		if(notify_rd >= 0)
-			FD_SET(notify_rd, &rfds);
+		FD_SET(stdin_fd, &rfds);
+		FD_SET(notify_rd, &rfds);
 		const int maxfd = (stdin_fd > notify_rd) ? stdin_fd : notify_rd;
 		if(select(maxfd + 1, &rfds, NULL, NULL, NULL) < 0)
 		{
@@ -852,14 +1088,14 @@ static int await_key_or_signal(WINDOW *win)
 			error_printf(0, "select() failed: %s", strerror(errno));
 			return -1;
 		}
-		else if(notify_rd >= 0 && FD_ISSET(notify_rd, &rfds))
+		else if(FD_ISSET(notify_rd, &rfds))
 		{ // One or more callbacks are ready, must drain the pipe then return -2
 			char buf[128];
 			ssize_t r;
 			do {
 				r = read(notify_fds[0], buf, sizeof(buf));
 			} while(r > 0 || (r < 0 && errno == EINTR));
-			uint8_t must_redraw_ui = 0; // use this sparingly, only when necessary to do a full re-draw
+			int must_redraw_ui = 0; // use this sparingly, only when necessary to do a full re-draw
 			for(struct cb_info *cb_page; (cb_page = cb_buffer()) ; )
 			{
 				if(cb_page->cb_type == ENUM_INITIALIZE_N)
@@ -910,22 +1146,22 @@ static int await_key_or_signal(WINDOW *win)
 				{
 				//	const int n = cb_page->cb_args->mem_int_a;
 					const uint8_t owner = cb_page->cb_args->mem_uint8;
-					if(window == PAGE_CONTACTS && ((owner == ENUM_OWNER_GROUP_CTRL && groups_mode) || (owner == ENUM_OWNER_CTRL && !groups_mode)))
-						must_redraw_ui = 1; // alt: draw_list();
+					if(window_contacts && ((owner == ENUM_OWNER_GROUP_CTRL && groups_mode) || (owner == ENUM_OWNER_CTRL && !groups_mode)))
+						must_redraw_ui = -2; // alt: draw_contacts();
 				}
 				else if(cb_page->cb_type == ENUM_PEER_ONLINE)
 				{
 					const int n = cb_page->cb_args->mem_int_a;
 					const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-					if(window == PAGE_CONTACTS && owner == ENUM_OWNER_CTRL && !groups_mode)
-						must_redraw_ui = 1; // alt: draw_list();
+					if(window_contacts && owner == ENUM_OWNER_CTRL && !groups_mode)
+						must_redraw_ui = -2; // alt: draw_contacts();
 				}
 				else if(cb_page->cb_type == ENUM_PEER_OFFLINE)
 				{
 					const int n = cb_page->cb_args->mem_int_a;
 					const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-					if(window == PAGE_CONTACTS && owner == ENUM_OWNER_CTRL && !groups_mode)
-						must_redraw_ui = 1; // alt: draw_list();
+					if(window_contacts && owner == ENUM_OWNER_CTRL && !groups_mode)
+						must_redraw_ui = -2; // alt: draw_contacts();
 				}
 				else if(cb_page->cb_type == ENUM_PEER_NEW)
 				{
@@ -965,8 +1201,8 @@ static int await_key_or_signal(WINDOW *win)
 							const int g = set_g(n,NULL);
 							group_n = getter_group_int(g,offsetof(struct group_list,n));
 						}
-						if(global_n == n || global_n == group_n)
-							must_redraw_ui = 1; // better than draw_chat(global_n); // NOT n or this could draw a PM chat
+						if(window_contacts || (global_n > -1 && (global_n == n || global_n == group_n)))
+							must_redraw_ui = -2; // better than draw_chat(global_n); // NOT n or this could draw a PM chat
 					}
 				}
 				else if(cb_page->cb_type == ENUM_MESSAGE_MODIFIED)
@@ -980,17 +1216,10 @@ static int await_key_or_signal(WINDOW *win)
 				else if(cb_page->cb_type == ENUM_LOGIN)
 				{
 					const int value = cb_page->cb_args->mem_int_a;
-					if(value == 0)
-					{ // Correct password
-						window = PAGE_CONTACTS;
-						create_windows();
-					}
-					else
-					{ // Wrong password
+					if(value == 0) // Correct password
+						draw_contacts();
+					else // Wrong password
 						beep();
-					//	draw_password();
-					}
-					must_redraw_ui = 1; // necessary when inputting correct password, must leave this loop
 				}
 				else if(cb_page->cb_type == ENUM_PEER_LOADED)
 				{
@@ -1000,7 +1229,7 @@ static int await_key_or_signal(WINDOW *win)
 				{
 					running = false;
 					sig_num = cb_page->cb_args->mem_int_a;
-					must_redraw_ui = 1; // necessary
+					must_redraw_ui = -1; // necessary
 				}
 				else if(cb_page->cb_type == ENUM_STREAM)
 				{
@@ -1022,17 +1251,14 @@ static int await_key_or_signal(WINDOW *win)
 				torx_free((void*)&cb_page);
 			}
 			if(must_redraw_ui)
-				return -2;
+				return must_redraw_ui;
 		}
-		else if(stdin_fd >= 0 && FD_ISSET(stdin_fd, &rfds))
+		else if(FD_ISSET(stdin_fd, &rfds))
 		{ // Keyboard input is ready
-			int ch = wgetch(win);
-			if(ch == ERR)
-			{
-				int attempts = 3;
-				while(attempts-- > 0 && ch == ERR)
-					ch = wgetch(win);
-			}
+			int attempts = 3,ch;
+			do {
+				ch = wgetch(win);
+			} while(ch == ERR && attempts-- > 0);
 			return ch;
 		}
 	}
@@ -1044,739 +1270,6 @@ void async_notifier(void)
 		return;
 	const uint8_t b = 1;
 	write(notify_fds[1], &b, 1); // Do not write more than one byte. Only single byte writes are threadsafe here.
-}
-
-static int chat_input_loop(const int n)
-{
-	chat_btn_focus = 0; // reset
-	for(;;)
-	{ // TODO there is no way to scroll input window, and it gets weird when it grows too big
-		getmaxyx_size(stdscr, &screen_rows, &screen_cols); // necessary
-		const size_t inner_w = screen_cols - 2;
-		size_t cur_row = 0, cur_col = 0;
-		size_t visual_lines = 1 + index_to_visual_simple(&cur_row, &cur_col, inner_w, t_peer[n].unsent, torx_allocation_len(t_peer[n].unsent)); // alt: t_peer[n].unsent_pos
-		size_t max_input_lines = screen_rows - 5;
-		if(screen_rows < 6)
-			max_input_lines = 1;
-		if(visual_lines > max_input_lines)
-			visual_lines = max_input_lines;
-		size_t desired_input_h = visual_lines + 2;
-		if(desired_input_h < 3)
-			desired_input_h = 3;
-		const size_t msgs_h = screen_rows - desired_input_h;
-		size_t cur_msgs_h = 0, cur_msgs_w = 0;
-		if(chat_msgs_win)
-			getmaxyx_size(chat_msgs_win, &cur_msgs_h, &cur_msgs_w);
-		if(!chat_msgs_win || cur_msgs_h != msgs_h || cur_msgs_w != screen_cols)
-		{ // Grow message input box
-			if(chat_msgs_win)
-				delwin(chat_msgs_win);
-			if(chat_input_win)
-				delwin(chat_input_win);
-			chat_msgs_win = newwin_size(msgs_h, screen_cols, 0, 0);
-			chat_input_win = newwin_size(desired_input_h, screen_cols, msgs_h, 0);
-			keypad(chat_input_win, TRUE);
-			keypad(chat_msgs_win, TRUE);
-		}
-// error_printf(0,"Checkpoint content_len=%lu inner_w=%lu visual_lines=%lu cur_row=%lu cur_col=%lu max_input_lines=%lu desired_input_h=%lu msgs_h=%lu cur_msgs_h=%lu cur_msgs_w=%lu",torx_allocation_len(t_peer[n].unsent) - 1 ,inner_w,visual_lines,cur_row,cur_col,max_input_lines,desired_input_h,msgs_h,cur_msgs_h,cur_msgs_w);
-		draw_chat(n);
-
-		const size_t unsent_len = torx_allocation_len(t_peer[n].unsent) ? torx_allocation_len(t_peer[n].unsent) - 1 : 0;
-		size_t start_x = 1,row = 1;
-		print_wrapped(chat_input_win,&row,&start_x,inner_w,t_peer[n].unsent,unsent_len);
-
-		// cursor visibility
-		if(chat_btn_focus != 0)
-		{
-			curs_set(0);
-			wrefresh(chat_input_win);
-		}
-		else
-		{
-			size_t vrow, vcol;
-			index_to_visual_simple(&vrow, &vcol, inner_w,t_peer[n].unsent, t_peer[n].unsent_pos);
-			if(vrow >= visual_lines)
-				vrow = visual_lines - 1;
-			size_t cursy = 1 + vrow;
-			size_t cursx = 1 + vcol;
-			size_t input_h_cur;
-			getmaxyx_size(chat_input_win, &input_h_cur, &screen_cols);
-			if(cursy >= input_h_cur)
-				cursy = input_h_cur - 1;
-			wmove_size(chat_input_win, cursy, cursx);
-			curs_set(1);
-		}
-		wrefresh(chat_input_win);
-
-		const int ch = await_key_or_signal(chat_input_win);
-		if(ch == -1 && resized)
-			return 0; // handle at main loop
-		else if(ch == -2)
-			continue; // redraw
-		else if(ch == ERR || ch < 0)
-			continue;
-		else if(ch == '\t')
-		{
-			chat_btn_focus = (chat_btn_focus + 1) % 3;
-			continue;
-		}
-		else if(chat_btn_focus == 1 || chat_btn_focus == 2)
-		{
-			if(ch == KEY_LEFT || ch == KEY_RIGHT)
-				chat_btn_focus = 3 - chat_btn_focus;
-			else if(ch == KEY_UP || ch == KEY_DOWN)
-				chat_btn_focus = 0;
-			else if(ch == KEY_ESC || ch == KEY_HOME)
-				return 1; /* return to contacts */
-			else if(ch == '\n' || ch == KEY_ENTER || ch == ' ')
-			{
-				if(chat_btn_focus == 1)
-				{
-					if(settings_chat_loop(n) == -2)
-						return 0; /* closed due to resize */
-				}
-				else if(actions_chat_loop(n) == -2)
-					return 0;
-			}
-			continue;
-		}
-		else if(ch == '\n' || ch == '\r')
-		{
-			if(!unsent_len)
-				continue; // ignore it
-			else if(t_peer[n].unsent_pos == unsent_len)
-			{ // send message
-				int g = -1;
-				uint8_t g_invite_required = 0;
-				const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-				if(owner == ENUM_OWNER_GROUP_CTRL)
-				{
-					g = set_g(n,NULL);
-					g_invite_required = getter_group_uint8(g,offsetof(struct group_list,invite_required));
-				}
-				if(owner == ENUM_OWNER_GROUP_CTRL && g_invite_required) // date && sign private group messages
-					message_send(n,ENUM_PROTOCOL_UTF8_TEXT_DATE_SIGNED,t_peer[n].unsent,torx_allocation_len(t_peer[n].unsent)-1);
-				else // regular messages, private messages (in authenticated pipes), public messages in public groups (in authenticated pipes)
-					message_send(n,ENUM_PROTOCOL_UTF8_TEXT,t_peer[n].unsent,torx_allocation_len(t_peer[n].unsent)-1);
-				torx_free((void*)&t_peer[n].unsent);
-				t_peer[n].unsent_pos = 0;
-				chat_scroll_lines = 0;
-			}
-			else
-			{ // insert newline at cursor
-				t_peer[n].unsent = torx_realloc(t_peer[n].unsent, torx_allocation_len(t_peer[n].unsent) + 1);
-				const size_t rem = unsent_len - t_peer[n].unsent_pos;
-				memmove(&t_peer[n].unsent[t_peer[n].unsent_pos+1], &t_peer[n].unsent[t_peer[n].unsent_pos], rem + 1);
-				t_peer[n].unsent[t_peer[n].unsent_pos] = '\n';
-				t_peer[n].unsent_pos++;
-			}
-		}
-		else if(ch == KEY_DELETE)
-		{
-			if(t_peer[n].unsent_pos < unsent_len)
-			{
-				const size_t rem = unsent_len - t_peer[n].unsent_pos;
-				memmove(&t_peer[n].unsent[t_peer[n].unsent_pos], &t_peer[n].unsent[t_peer[n].unsent_pos+1], rem);
-				t_peer[n].unsent = torx_realloc(t_peer[n].unsent, torx_allocation_len(t_peer[n].unsent) - 1);
-			}
-			else
-				beep();
-		}
-		else if(ch == KEY_BACKSPACE || ch == 127 || ch == 8)
-		{
-			if(t_peer[n].unsent_pos > 0)
-			{
-				const size_t rem = unsent_len - t_peer[n].unsent_pos;
-				memmove(&t_peer[n].unsent[t_peer[n].unsent_pos-1], &t_peer[n].unsent[t_peer[n].unsent_pos], rem + 1);
-				t_peer[n].unsent = torx_realloc(t_peer[n].unsent, torx_allocation_len(t_peer[n].unsent) - 1);
-				t_peer[n].unsent_pos--;
-			}
-			else
-				beep();
-		}
-		else if(ch == KEY_ESC || ch == KEY_HOME)
-			return 1;
-		else if(ch == KEY_PPAGE)
-		{ // PgUp
-			size_t mh;
-			getmaxyx_size(chat_msgs_win, &mh, &screen_cols);
-			size_t inner_h = mh - minimum_size_vertical;
-			if(inner_h < 1)
-				inner_h = 1;
-			const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-			int min_i,max_i,msg_count,g;
-			struct msg_list *page;
-			if(owner == ENUM_OWNER_GROUP_CTRL)
-			{
-				g = set_g(n,NULL);
-				pthread_rwlock_rdlock(&mutex_expand_group); // 🟧
-				page = group[g].msg_first;
-				msg_count = (int)group[g].msg_count;
-				pthread_rwlock_unlock(&mutex_expand_group); // 🟩
-			}
-			else
-			{
-				max_i = getter_int(n,INT_MIN,-1,offsetof(struct peer_list,max_i));
-				min_i = getter_int(n,INT_MIN,-1,offsetof(struct peer_list,min_i));
-				msg_count = max_i + 1 - min_i;
-			}
-			size_t total_visual_lines = 0;
-			if(msg_count)
-			{
-				if(owner == ENUM_OWNER_GROUP_CTRL)
-					while(page)
-					{
-						total_visual_lines += get_lines(page->n,page->i,inner_w);
-						page = page->message_next;
-					}
-				else
-					for(int i = min_i; i <= max_i; i++)
-						total_visual_lines += get_lines(n,i,inner_w);
-			}
-			else
-				total_visual_lines = 1;
-			const size_t max_scroll = (total_visual_lines > inner_h) ? (total_visual_lines - inner_h) : 0;
-			if(chat_scroll_lines < max_scroll)
-			{
-				chat_scroll_lines = chat_scroll_lines + inner_h;
-				if(chat_scroll_lines > max_scroll)
-					chat_scroll_lines = max_scroll;
-			}
-		}
-		else if(ch == KEY_NPAGE)
-		{ // PgDn
-
-			size_t mh;
-			getmaxyx_size(chat_msgs_win, &mh, &screen_cols);
-			size_t inner_h = mh - minimum_size_vertical;
-			if(inner_h < 1)
-				inner_h = 1;
-			if(chat_scroll_lines >= inner_h)
-				chat_scroll_lines -= inner_h;
-			else
-				chat_scroll_lines = 0;
-		}
-		else if(ch == KEY_END)
-			chat_scroll_lines = 0;
-		else if(ch == KEY_LEFT)
-		{
-			if(t_peer[n].unsent_pos > 0)
-				t_peer[n].unsent_pos--;
-			else
-				beep();
-		}
-		else if(ch == KEY_RIGHT)
-		{
-			if(t_peer[n].unsent_pos < unsent_len)
-				t_peer[n].unsent_pos++;
-		}
-		else if(ch == KEY_UP)
-		{
-			size_t r,c2;
-			index_to_visual_simple(&r, &c2, inner_w, t_peer[n].unsent, t_peer[n].unsent_pos);
-			if(r == 0)
-			{
-				t_peer[n].unsent_pos = 0;
-				continue;
-			}
-			size_t best = 0;
-			for(size_t iter = 0; iter <= unsent_len; ++iter)
-			{
-				size_t rr,cc;
-				index_to_visual_simple(&rr, &cc, inner_w, t_peer[n].unsent, iter);
-				if(rr == r-1)
-				{
-					best = iter;
-					break;
-				}
-			}
-			size_t avail = 0;
-			while(best + avail <= unsent_len)
-			{
-				size_t rr,cc;
-				index_to_visual_simple(&rr, &cc, inner_w, t_peer[n].unsent, best + avail);
-				if(rr != r-1)
-					break;
-				avail++;
-			}
-			if(c2 > avail)
-				c2 = avail;
-			t_peer[n].unsent_pos = best + c2;
-		}
-		else if(ch == KEY_DOWN)
-		{
-			size_t r,c2;
-			index_to_visual_simple(&r, &c2, inner_w, t_peer[n].unsent, t_peer[n].unsent_pos);
-			const size_t total_vis = index_to_visual_simple(NULL,NULL,inner_w,t_peer[n].unsent,torx_allocation_len(t_peer[n].unsent)-1);
-			if(r >= total_vis - 1)
-			{
-				t_peer[n].unsent_pos = unsent_len;
-				continue;
-			}
-			int first = -1;
-			for(size_t iter = 0; iter <= unsent_len; ++iter)
-			{
-				size_t rr,cc;
-				index_to_visual_simple(&rr, &cc, inner_w, t_peer[n].unsent, iter);
-				if(rr == r+1)
-				{
-					first = (int)iter;
-					break;
-				}
-			}
-			if(first < 0)
-			{
-				t_peer[n].unsent_pos = unsent_len;
-				continue;
-			}
-			const size_t first_cast = (size_t)first;
-			size_t avail = 0;
-			while(first_cast + avail <= unsent_len)
-			{
-				size_t rr,cc;
-				index_to_visual_simple(&rr, &cc, inner_w, t_peer[n].unsent, first_cast + avail);
-				if(rr != r+1)
-					break;
-				avail++;
-			}
-			if(c2 > avail)
-				c2 = avail;
-			t_peer[n].unsent_pos = first_cast + c2;
-		}
-		else if(ch >= 32 && ch <= 126)
-		{
-			t_peer[n].unsent = torx_realloc(t_peer[n].unsent, torx_allocation_len(t_peer[n].unsent) + 1);
-			const size_t rem = unsent_len - t_peer[n].unsent_pos;
-			memmove(&t_peer[n].unsent[t_peer[n].unsent_pos + 1], &t_peer[n].unsent[t_peer[n].unsent_pos], rem + 1);
-			t_peer[n].unsent[t_peer[n].unsent_pos] = (char)ch;
-			t_peer[n].unsent_pos++;
-		}
-	}
-	return 0;
-}
-
-static int settings_chat_loop(const int n)
-{
-	static bool depreciated_online = false; // TODO remove
-	const size_t h = 10;
-	size_t w = screen_cols - minimum_size_horizontal;
-	if(w < 40)
-		w = 40;
-	const size_t y = (screen_rows - h) / 2;
-	const size_t x = (screen_cols - w) / 2;
-	WINDOW *dlg = newwin_size(h, w, y, x);
-	keypad(dlg, TRUE);
-	int focus = 0;
-	char *peernick = getter_string(n,INT_MIN,-1,offsetof(struct peer_list,peernick));
-	const sig_atomic_t seen = resize_seq;
-	while(1)
-	{
-		if(seen != resize_seq)
-		{ // close popover on resize so main UI can rebuild cleanly
-			delwin(dlg);
-			torx_free((void*)&peernick);
-			return -2;
-		}
-		werase(dlg);
-		box(dlg,0,0);
-		mvwprintw_size(dlg,0,2," Contact Settings ");
-		if(!focus)
-			wattron(dlg,A_REVERSE);
-
-		const size_t maxnick = w - 15;
-		mvwprintw_size(dlg,2,2,"Nickname: ");
-		mvwprintw_size(dlg,2,12,"%.*s", (int)maxnick, peernick);
-		if(focus == 0)
-			wattroff(dlg,A_REVERSE);
-		if(focus == 1)
-			wattron(dlg,A_REVERSE);
-		mvwprintw_size(dlg,4,2,"[ %c ] Online", depreciated_online ? 'x':' ');
-		if(focus == 1)
-			wattroff(dlg,A_REVERSE);
-		if(focus == 2)
-			wattron(dlg,A_REVERSE);
-		mvwprintw_size(dlg,5,2,"Unread count: %lu", t_peer[n].unread);
-		if(focus == 2)
-			wattroff(dlg,A_REVERSE);
-		if(focus == 3)
-			wattron(dlg,A_REVERSE);
-		mvwprintw_size(dlg,7,2,"[ Close ]");
-		if(focus == 3)
-			wattroff(dlg,A_REVERSE);
-		mvwprintw_size(dlg,h-2,2,"Tab: cycle  Enter/Space: edit/toggle  Esc: close");
-		wrefresh(dlg);
-
-		const int ch = wgetch(dlg);
-		if(ch == KEY_ESC)
-			break;
-		else if(ch == KEY_UP)
-			focus = (focus + 3) % 4;
-		else if(ch == KEY_DOWN)
-			focus = (focus + 1) % 4;
-		else if(ch == '\t')
-			focus = (focus + 1) % 4;
-		else if(ch == '\n' || ch == KEY_ENTER || ch == ' ')
-		{
-			if(focus == 0)
-			{
-				echo();
-				curs_set(1);
-				size_t idx = torx_allocation_len(peernick) - 1;
-				if(idx > w - 15 - 1)
-					idx = w - 15 - 1;
-				mvwprintw_size(dlg,2,12,"%-*s", (int)w - 15, peernick);
-				wmove_size(dlg,2,12 + idx);
-				wrefresh(dlg);
-				while(1)
-				{
-					const int cch = wgetch(dlg);
-					if(cch == '\n' || cch == '\r' || cch == KEY_ESC)
-						break;
-					else if(cch == KEY_LEFT)
-					{
-						if(idx > 0)
-						{
-							idx--;
-							wmove_size(dlg,2,12+idx);
-							wrefresh(dlg);
-						}
-					}
-					else if(cch == KEY_RIGHT)
-					{
-						if(idx < torx_allocation_len(peernick) - 1)
-						{
-							idx++;
-							wmove_size(dlg,2,12+idx);
-							wrefresh(dlg);
-						}
-					}
-					else if(cch == KEY_DELETE)
-					{
-						if(idx < torx_allocation_len(peernick) - 1)
-						{
-							memmove(&peernick[idx], &peernick[idx+1], torx_allocation_len(peernick) - 1 - idx);
-							peernick = torx_realloc(peernick,torx_allocation_len(peernick)-1);
-							mvwprintw_size(dlg,2,12,"%-*s", (int)w - 15, peernick);
-							wmove_size(dlg,2,12+idx);
-							wrefresh(dlg);
-						}
-						else
-							beep();
-					}
-					else if(cch == KEY_BACKSPACE || cch == 127 || cch == 8)
-					{
-						if(idx > 0)
-						{
-							memmove(&peernick[idx-1], &peernick[idx], torx_allocation_len(peernick) - 1 - idx + 1);
-							peernick = torx_realloc(peernick,torx_allocation_len(peernick)-1);
-							idx--;
-							mvwprintw_size(dlg,2,12,"%-*s", (int)w - 15, peernick);
-							wmove_size(dlg,2,12+idx);
-							wrefresh(dlg);
-						}
-						else
-							beep();
-					}
-					else if(cch >= 32 && cch <= 126)
-					{
-						if(torx_allocation_len(peernick) - 1 < w - 15 - 1)
-						{ // TODO permit unlimited lengths
-							peernick = torx_realloc(peernick,torx_allocation_len(peernick)+1);
-							memmove(&peernick[idx+1], &peernick[idx], torx_allocation_len(peernick) - 1 - idx + 1);
-							peernick[idx] = (char)cch;
-							idx++;
-							mvwprintw_size(dlg,2,12,"%-*s", (int)w - 15, peernick);
-							wmove_size(dlg,2,12+idx);
-							wrefresh(dlg);
-						}
-						else
-							beep();
-					}
-				}
-				noecho();
-				curs_set(0);
-				change_nick(n,peernick);
-			}
-			else if(focus == 1)
-				depreciated_online = !depreciated_online;
-			else if(focus == 2)
-			{
-				echo();
-				curs_set(1);
-				char nb[20];
-				size_t nb_len = (size_t)snprintf(nb,sizeof(nb), "%lu", t_peer[n].unread);
-				size_t idx = nb_len;
-				mvwprintw_size(dlg,5,18,"%6s", nb);
-				wmove_size(dlg,5,18+nb_len);
-				wrefresh(dlg);
-				while(1)
-				{
-					const int cch = wgetch(dlg);
-					if(cch == '\n' || cch == '\r' || cch == KEY_ESC)
-						break;
-					else if(cch == KEY_DELETE)
-					{
-						if(idx < nb_len)
-						{
-							memmove(&nb[idx], &nb[idx+1], nb_len - idx);
-							nb_len--;
-							mvwprintw_size(dlg,5,18,"%6s", nb);
-							wmove_size(dlg,5,18+idx);
-							wrefresh(dlg);
-						}
-						else
-							beep();
-					}
-					else if(cch == KEY_BACKSPACE || cch == 127 || cch == 8)
-					{
-						if(idx > 0)
-						{
-							memmove(&nb[idx-1], &nb[idx], nb_len - idx + 1);
-							nb_len--;
-							idx--;
-							mvwprintw_size(dlg,5,18,"%6s", nb);
-							wmove_size(dlg,5,18+idx);
-							wrefresh(dlg);
-						}
-						else
-							beep();
-					}
-					else if(cch >= '0' && cch <= '9')
-					{
-						if(idx < sizeof(nb)-2)
-						{
-							memmove(&nb[idx+1], &nb[idx], nb_len - idx + 1);
-							nb[idx] = (char)cch;
-							nb_len++;
-							idx++;
-							mvwprintw_size(dlg,5,18,"%6s", nb);
-							wmove_size(dlg,5,18+idx);
-							wrefresh(dlg);
-						}
-						else
-							beep();
-					}
-				}
-				noecho();
-				curs_set(0);
-				t_peer[n].unread = (size_t)atoll(nb);
-			}
-			else
-				break;
-		}
-	}
-	delwin(dlg);
-	torx_free((void*)&peernick);
-	return 0;
-}
-
-static int actions_chat_loop(const int n)
-{
-	const size_t h = 7, w = 40; // TODO why is this hardcoded?
-	const size_t y = (screen_rows - h) / 2, x = (screen_cols - w) / 2;
-	WINDOW *dlg = newwin_size(h,w,y,x);
-	keypad(dlg, TRUE);
-	int focus = 0;
-	const sig_atomic_t seen = resize_seq;
-	while(1)
-	{
-		if(seen != resize_seq)
-		{
-			delwin(dlg);
-			return -2;
-		}
-		werase(dlg);
-		box(dlg,0,0);
-		mvwprintw_size(dlg,0,2," Actions ");
-		if(focus == 0)
-			wattron(dlg,A_REVERSE);
-		mvwprintw_size(dlg,2,2,"Clear message history");
-		if(focus == 0)
-			wattroff(dlg,A_REVERSE);
-		if(focus == 1)
-			wattron(dlg,A_REVERSE);
-		mvwprintw_size(dlg,3,2,"Clear unread count");
-		if(focus == 1)
-			wattroff(dlg,A_REVERSE);
-		mvwprintw_size(dlg,h-2,2,"Up/Down: move  Enter/Space: action  Esc: close");
-		wrefresh(dlg);
-		const int ch = wgetch(dlg);
-		if(ch == KEY_ESC)
-			break;
-		else if(ch == KEY_UP)
-			focus = (focus + 1) % 2;
-		else if(ch == KEY_DOWN)
-			focus = (focus + 1) % 2;
-		else if(ch == '\t')
-			focus = (focus + 1) % 2;
-		else if(ch == '\n' || ch == KEY_ENTER || ch == ' ')
-		{
-			if(focus == 0)
-				delete_log(n);
-			else
-				t_peer[n].unread = 0;
-		}
-	}
-	delwin(dlg);
-	return 0;
-}
-
-static void draw_settings(void)
-{ // Settings Route
-	if(!settings_win)
-	{
-		error_simple(0,"settings_win does not exist. UI Coding error. Report this.");
-		return;
-	}
-	werase(settings_win);
-	box(settings_win,0,0);
-	mvwprintw_size(settings_win, 0, 2, " Settings ");
-	const char *labels[SETTINGS_COUNT] = {
-		"Enable Flibbertigibbet Mode",
-		"Auto-Snort on New Message",
-		"Enable Ridonkulous Echo",
-		"Use Quantum Sock Drawer"
-	};
-	for(size_t iter = 0; iter < SETTINGS_COUNT; ++iter)
-	{
-		size_t label_w = screen_cols - 12;
-		if(label_w < 10)
-			label_w = 10;
-		if(settings_focus_idx == iter)
-			wattron(settings_win, A_REVERSE);
-		size_t y = 2  + iter * 3, x = 4;
-		mvwprintw_size(settings_win, y, x, "[%c] %.*s", settings_toggle[iter] ? 'x':' ', (int)label_w - 6, labels[iter]);
-		if(settings_focus_idx == iter)
-			wattroff(settings_win, A_REVERSE);
-	}
-	const size_t text_y = 2 + SETTINGS_COUNT*3;
-	if(settings_focus_idx == SETTINGS_COUNT)
-		wattron(settings_win, A_REVERSE);
-	mvwprintw_size(settings_win, text_y, 4, "Custom Silliness: %s", settings_text);
-	if(settings_focus_idx == SETTINGS_COUNT)
-		wattroff(settings_win, A_REVERSE);
-	mvwprintw_size(settings_win, screen_rows-2, 2, "Up/Down: move  Enter/Space: toggle/edit  Esc/Home: Back");
-	wrefresh(settings_win);
-}
-
-static int settings_loop(void)
-{
-	keypad(settings_win, TRUE);
-	while(1)
-	{
-		draw_settings();
-		const int ch = await_key_or_signal(settings_win);
-		if(ch == -1 && resized)
-			return 0; // handle at main loop
-		else if(ch == -2)
-			continue; // redraw
-		else if(ch == ERR || ch < 0)
-			continue;
-		else if(ch == KEY_UP)
-		{
-			if(settings_focus_idx > 0)
-				settings_focus_idx--;
-			else
-				settings_focus_idx = SETTINGS_COUNT;
-		}
-		else if(ch == KEY_DOWN)
-		{
-			if(settings_focus_idx < SETTINGS_COUNT)
-				settings_focus_idx++;
-			else
-				settings_focus_idx = 0;
-		}
-		else if(ch == '\t')
-			settings_focus_idx = (settings_focus_idx + 1) % (SETTINGS_COUNT + 1);
-		else if(ch == '\n' || ch == KEY_ENTER || ch == ' ')
-		{
-			if(settings_focus_idx < SETTINGS_COUNT)
-				settings_toggle[settings_focus_idx] = !settings_toggle[settings_focus_idx];
-			else
-			{
-				echo();
-				curs_set(1);
-				const size_t ty = 2 + SETTINGS_COUNT*3;
-				size_t idx = settings_text_len;
-				const size_t maxlen = sizeof(settings_text) - 2;
-				mvwprintw_size(settings_win, ty, 4 + 18, "%-*s", 40, settings_text);
-				wmove_size(settings_win, ty, 4 + 18 + idx);
-				wrefresh(settings_win);
-				while(1)
-				{
-					const int cch = wgetch(settings_win);
-					if(cch == '\n' || cch == '\r')
-						break;
-					else if(cch == KEY_ESC || cch == KEY_HOME)
-						break;
-					else if(cch == KEY_LEFT)
-					{
-						if(idx > 0)
-						{
-							idx--;
-							wmove_size(settings_win, ty, 4 + 18 + idx);
-							wrefresh(settings_win);
-						}
-					}
-					else if(cch == KEY_RIGHT)
-					{
-						if(idx < settings_text_len)
-						{
-							idx++;
-							wmove_size(settings_win, ty, 4 + 18 + idx);
-							wrefresh(settings_win);
-						}
-					}
-					else if(cch == KEY_DELETE)
-					{
-						if(idx < settings_text_len)
-						{
-							memmove(&settings_text[idx], &settings_text[idx+1], settings_text_len - idx);
-							settings_text_len--;
-							mvwprintw_size(settings_win, ty, 4 + 18, "%-40s", settings_text);
-							wmove_size(settings_win, ty, 4 + 18 + idx);
-							wrefresh(settings_win);
-						}
-						else
-							beep();
-					}
-					else if(cch == KEY_BACKSPACE || cch == 127 || cch == 8)
-					{
-						if(idx > 0)
-						{
-							memmove(&settings_text[idx-1], &settings_text[idx], settings_text_len - idx + 1);
-							idx--;
-							settings_text_len--;
-							mvwprintw_size(settings_win, ty, 4 + 18, "%-40s", settings_text);
-							wmove_size(settings_win, ty, 4 + 18 + idx);
-							wrefresh(settings_win);
-						}
-						else
-							beep();
-					}
-					else if(cch >= 32 && cch <= 126)
-					{
-						if(settings_text_len < maxlen)
-						{ // TODO permit unlimited lengths
-							memmove(&settings_text[idx+1], &settings_text[idx], settings_text_len - idx + 1);
-							settings_text[idx] = (char)cch;
-							idx++;
-							settings_text_len++;
-							mvwprintw_size(settings_win, ty, 4 + 18, "%-40s", settings_text);
-							wmove_size(settings_win, ty, 4 + 18 + idx);
-							wrefresh(settings_win);
-						}
-						else
-							beep();
-					}
-				}
-				noecho();
-				curs_set(0);
-			}
-		}
-		else if(ch == KEY_ESC || ch == KEY_HOME)
-			return 0;
-	}
 }
 
 static inline void option_handler(int argc, char **argv)
@@ -1849,10 +1342,9 @@ Application Options:\n\
 
 int main(int argc, char **argv)
 {
-	// Set up pipe for async callbacks
-	if(pipe(notify_fds) < 0)
-	{
-		perror("pipe");
+	if(pipe(notify_fds) < 0) // Set up pipe for async callbacks
+	{ // XXX Use printf here, not error_printf
+		printf("Pipe appears not supported. Cannot run on this system.\n");
 		return 1;
 	}
 	int flags = fcntl(notify_fds[0], F_GETFL, 0);
@@ -1868,15 +1360,16 @@ int main(int argc, char **argv)
 	setlocale(LC_ALL, "");
 
 	// Initialize ncurses
-	initscr(); cbreak(); noecho(); noqiflush(); keypad(stdscr, TRUE);
-	set_escdelay(50); // Reduce delay upon pressing Esc
+	initscr(); cbreak(); noecho(); noqiflush();
+	keypad(stdscr,TRUE); // necessary to use arrow keys
+	set_escdelay(50); // Reduce delay upon pressing Esc. Only relevant if we use keypad() anywhere
 
 	// Set window resize function
 	struct sigaction sa = {0};
 	sa.sa_handler = signal_resize;
 	sigaction(SIGWINCH, &sa, NULL);
 
-	create_windows();
+	draw_login();
 
 	while(running)
 	{
@@ -1884,102 +1377,17 @@ int main(int argc, char **argv)
 		{
 			resized = 0;
 			endwin(); refresh(); clear(); // all necessary when resizing
-			create_windows();
+			redraw();
 		}
-		else if(window == PAGE_PASSWORD)
-		{
-			const int ch = await_key_or_signal(pw_win);
-			if(ch == -1 && resized)
-				continue;
-			else if(ch == -2)
-				draw_password(); // redraw
-			else if(ch == ERR || ch < 0)
-				continue;
-			else if(ch == '\t' || ch == KEY_BTAB)
-			{
-				pw_focus = (pw_focus + 1) % (torx_allocation_len(widget) / sizeof(struct widget));
-				draw_password();
-			}
-			else if(ch == KEY_ESC || ch == KEY_HOME)
-				break;
-			else if(ch == KEY_UP)
-			{
-				if(pw_focus > 0)
-					pw_focus--;
-				draw_password();
-			}
-			else if(ch == KEY_DOWN)
-			{
-				if(pw_focus < torx_allocation_len(widget) / sizeof(struct widget) - 1)
-					pw_focus++;
-				draw_password();
-			}
-			else if(widget[pw_focus].callback(ch))
-				draw_password();
-		}
-		else if(window == PAGE_CONTACTS)
-		{
-			const int ch = await_key_or_signal(list_win);
-			if(ch == -1 && resized)
-				continue;
-			else if(ch == -2)
-				draw_list(); // redraw
-			else if(ch == ERR || ch < 0)
-				continue;
-			else if(ch == KEY_UP)
-			{
-				if(list_focus > 0)
-					list_focus--;
-				draw_list();
-			}
-			else if(ch == KEY_DOWN)
-			{
-				if(list_focus < torx_allocation_len(widget) / sizeof(struct widget) - 1)
-					list_focus++;
-				draw_list();
-			}
-			else if(ch == '\t' || ch == KEY_BTAB)
-			{
-				list_focus = (list_focus + 1) % (torx_allocation_len(widget) / sizeof(struct widget));
-				draw_list();
-			}
-			else if(ch == KEY_RIGHT)
-			{
-				list_focus = (list_focus + 1) % list_first_peer_w;
-				draw_list();
-			}
-			else if(ch == KEY_LEFT)
-			{
-				list_focus = list_first_peer_w;
-				draw_list();
-			}
-			else if(ch == KEY_ESC || ch == KEY_HOME)
-				running = false;
-			else if(widget[list_focus].callback(ch))
-				draw_list();
-		}
-		else if(window == PAGE_CHAT)
-		{
-			const int res = chat_input_loop(global_n);
-			if(res == 1)
-			{
-				window = PAGE_CONTACTS;
-				global_n = -1;
-				create_windows();
-			}
-			else if(res == -1)
-				running = false;
-		}
-		else if(window == PAGE_SETTINGS)
-		{
-			settings_loop();
-			window = PAGE_CONTACTS;
-			create_windows();
-		}
+		const int ch = await_key_or_signal(stdscr);
+		if(ch == ERR || (ch < 0 && ch != -2))
+			continue;
+		else if(ch == -2 || keypress(*current_focus,ch))
+			redraw();
 	}
 	// Clean-up
 	cleanup_lib(sig_num);
-	destroy_windows();
+	widget_clear(NULL);
 	endwin();
 	if(notify_fds[0] >= 0)
 		close(notify_fds[0]);
