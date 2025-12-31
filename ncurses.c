@@ -146,6 +146,7 @@ static size_t screen_rows, screen_cols; // this will be set on startup and resiz
 static int notify_fds[2] = { -1, -1 }; // triggered by library callbacks, indicating that a UI call to cb_buffer is requested
 
 static size_t chat_scroll_lines = 0; // Number of lines currently scrolled
+static size_t chat_scroll_max;
 static size_t chat_scroll_jump; // Number of lines to move upon PgUp PgDn (set by draw_chat)
 
 /* Password window state */
@@ -663,12 +664,12 @@ static void draw_contacts(void)
 	widget_draw_cursor(window_contacts); // XXX Must do last
 }
 
-static inline size_t print_message(int *visual_idx,size_t *draw_y,const uint8_t owner,const int n,const int i,const int first_line_index,const int bottom_line_index)
+static inline size_t print_message(WINDOW *win,const size_t top_line,const size_t height_of_scrollable,const size_t must_be_processed_lines,const size_t processed_lines,const int n,const int i)
 {
-	size_t lines_printed = 0;
+	size_t lines = 0;
 	const int p_iter = getter_int(n,i,-1,offsetof(struct message_list,p_iter));
 	if(p_iter < 0)
-		return lines_printed;
+		return lines;
 	pthread_rwlock_rdlock(&mutex_protocols); // 🟧
 	const uint8_t utf8 = protocols[p_iter].utf8;
 	const uint8_t group_pm = protocols[p_iter].group_pm;
@@ -676,48 +677,41 @@ static inline size_t print_message(int *visual_idx,size_t *draw_y,const uint8_t 
 	const uint32_t date_len = protocols[p_iter].date_len;
 	const uint32_t signature_len = protocols[p_iter].signature_len;
 	pthread_rwlock_unlock(&mutex_protocols); // 🟩
+	const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
 	if(owner == ENUM_OWNER_GROUP_PEER)
 	{
 		const uint8_t stat = getter_uint8(n,i,-1,offsetof(struct message_list,stat));
 		if(!group_pm && stat != ENUM_MESSAGE_RECV)
-			return lines_printed; // Do not print OUTBOUND messages on GROUP_PEER unless they are private
+			return lines; // Do not print OUTBOUND messages on GROUP_PEER unless they are private
 		const uint8_t status = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,status));
 		if(stat == ENUM_MESSAGE_RECV && (t_peer[n].mute || status == ENUM_STATUS_BLOCKED))
-			return lines_printed; // Do not print inbound messages from muted (ignored) or blocked group peers
+			return lines; // Do not print inbound messages from muted (ignored) or blocked group peers
 	}
 	if(utf8 && null_terminated_len)
 	{
 		char *message = getter_string(n,i,-1,offsetof(struct message_list,message));
 		if(!message) // this would be a bug?
-			return lines_printed;
-		if(*visual_idx >= first_line_index && *visual_idx <= bottom_line_index)
-		{ // we only ACTUALLY print it if it is within the visual zone
-			size_t start_x = 1;
-			lines_printed += 1 + print_wrapped(window_chat,draw_y,&start_x,inner_width,message,torx_allocation_len(message) - null_terminated_len - date_len - signature_len);
-			*draw_y = *draw_y + 1;
+			return lines;
+		const size_t printable_len = torx_allocation_len(message) - null_terminated_len - date_len - signature_len;
+		size_t anticipated_lines = 1 + print_wrapped(NULL,NULL,NULL,inner_width,message,printable_len);
+		size_t offset = 0;
+		if(win && ((anticipated_lines + processed_lines > must_be_processed_lines - height_of_scrollable) || must_be_processed_lines < height_of_scrollable))
+		{ // we are ACTUALLY printing
+			const size_t available_lines = (must_be_processed_lines - processed_lines > height_of_scrollable) ? height_of_scrollable : must_be_processed_lines - processed_lines;
+			while(anticipated_lines > available_lines)
+			{ // Can only print latter part of message, must set offset
+				size_t iter = 0;
+				while(iter < inner_width && message[offset + iter] != '\n')
+					iter++;
+				offset += iter;
+				anticipated_lines--;
+			}
+			size_t fx = (screen_cols - inner_width)/2;
+			size_t fy = top_line + available_lines - anticipated_lines;
+			lines += 1 + print_wrapped(win,&fy,&fx,inner_width,&message[offset],printable_len - offset);
 		}
-		*visual_idx = *visual_idx + 1;
-		torx_free((void*)&message);
-	}
-	return lines_printed;
-}
-
-static inline size_t get_lines(const int n,const int i,const size_t max_width)
-{ // highly inefficient, should use getter_length (NO, does not account for newlines) or cache length (ALSO NO, doesn't account for window size changes)
-	size_t lines = 0;
-	const int p_iter = getter_int(n,i,-1,offsetof(struct message_list,p_iter));
-	if(p_iter < 0)
-		return lines;
-	pthread_rwlock_rdlock(&mutex_protocols); // 🟧
-	const uint8_t utf8 = protocols[p_iter].utf8;
-	const uint32_t null_terminated_len = protocols[p_iter].null_terminated_len;
-	const uint32_t date_len = protocols[p_iter].date_len;
-	const uint32_t signature_len = protocols[p_iter].signature_len;
-	pthread_rwlock_unlock(&mutex_protocols); // 🟩
-	if(utf8 && null_terminated_len)
-	{
-		char *message = getter_string(n,i,-1,offsetof(struct message_list,message));
-		lines = 1 + print_wrapped(NULL,NULL,NULL,max_width,message,torx_allocation_len(message) - null_terminated_len - date_len - signature_len);
+		else // not actually printing
+			lines = anticipated_lines;
 		torx_free((void*)&message);
 	}
 	return lines;
@@ -759,8 +753,8 @@ static int callback_message_input(const int w,const int ch)
 			t_peer[n].unsent_pos++;
 		}
 	}
-	else if(ch == KEY_PPAGE)
-		chat_scroll_lines += chat_scroll_jump; // PgUp
+	else if(ch == KEY_PPAGE && !chat_scroll_max) // PgUp
+		chat_scroll_lines += chat_scroll_jump;
 	else if(ch == KEY_NPAGE && chat_scroll_lines > 0)
 	{ // PgDn
 		if(chat_scroll_lines > chat_scroll_jump)
@@ -843,52 +837,59 @@ static void draw_chat(const int n)
 		min_i = getter_int(n,INT_MIN,-1,offsetof(struct peer_list,min_i));
 		msg_count = max_i + 1 - min_i;
 	}
-	int total_visual_lines = 0;
-	if(msg_count)
-	{ // one or more messages exist
-		if(owner == ENUM_OWNER_GROUP_CTRL)
-			while(page)
-			{
-				total_visual_lines += (int)get_lines(page->n,page->i,inner_width);
-				page = page->message_next;
-			}
-		else
-			for(int i = min_i; i <= max_i; i++)
-				total_visual_lines += (int)get_lines(n,i,inner_width);
-	}
-	else
-		total_visual_lines = 1;
-
-	chat_scroll_jump = mid - 1;
-
+	chat_scroll_jump = mid - TOP_LINE_HEIGHT;
+	chat_scroll_max = 0; // must reset
 	// Print message history
-	const size_t max_scroll = ((size_t)total_visual_lines > chat_scroll_jump) ? ((size_t)total_visual_lines - chat_scroll_jump) : 0;
-	if(chat_scroll_lines > max_scroll)
-	{
-error_printf(0,"Checkpoint triggered: %lu > %lu",chat_scroll_lines,max_scroll);
-		chat_scroll_lines = max_scroll;
+	uint8_t reprinted = 0;
+	reprint: {}
+	if(reprinted)
+	{ // Clear what we already printed, have to print again because we hit the end
+		error_simple(0,"Checkpoint reprinting");
+		chat_scroll_lines = chat_scroll_max - chat_scroll_jump;
+		const size_t edge = (screen_cols - inner_width)/2;
+		for(size_t y = 0; y < chat_scroll_jump; y++)
+			for(size_t x = 0; x < inner_width; x++)
+				mvwaddch(window_chat, (int)y + TOP_LINE_HEIGHT, (int)(x + edge), (chtype)' ');
 	}
-size_t actual = 0;
 	if(msg_count)
 	{
-		const int bottom_line_index = total_visual_lines - TOP_LINE_HEIGHT - (int)chat_scroll_lines; // MUST BE INT
-		const int first_line_index = bottom_line_index - ((int)chat_scroll_jump - 1); // MUST BE INT
-error_printf(0,"Checkpoint csl=%lu tvl=%lu ms=%lu bli=%d fli=%d",chat_scroll_lines,total_visual_lines,max_scroll,bottom_line_index,first_line_index);
-		int visual_idx = 0;
-		size_t draw_y = TOP_LINE_HEIGHT;
+		const size_t must_be_processed_lines = chat_scroll_lines + chat_scroll_jump;
+		size_t processed_lines = 0;
 		if(owner == ENUM_OWNER_GROUP_CTRL)
 		{
 			pthread_rwlock_rdlock(&mutex_expand_group); // 🟧
-			page = group[g].msg_first;
+			page = group[g].msg_last;
 			pthread_rwlock_unlock(&mutex_expand_group); // 🟩
-			for(; page; page = page->message_next)
-				actual += print_message(&visual_idx,&draw_y,owner,page->n,page->i,first_line_index,bottom_line_index);
+			for(; page && must_be_processed_lines > processed_lines; page = page->message_prior)
+			{
+				processed_lines += print_message(window_chat,TOP_LINE_HEIGHT,chat_scroll_jump,must_be_processed_lines,processed_lines,page->n,page->i);
+				if(page->message_prior == NULL && message_load_more(n) == 0)
+				{ // no more to load
+					chat_scroll_max = processed_lines;
+					if(!reprinted++)
+						goto reprint;
+					break;
+				}
+			}
 		}
 		else
-			for(int i = min_i; i <= max_i; i++)
-				actual += print_message(&visual_idx,&draw_y,owner,n,i,first_line_index,bottom_line_index);
-	}
+			for(int i = max_i; i >= min_i && must_be_processed_lines > processed_lines; i--)
+			{
+				processed_lines += print_message(window_chat,TOP_LINE_HEIGHT,chat_scroll_jump,must_be_processed_lines,processed_lines,n,i);
+				if(i == min_i)
+				{ // no older messages loaded
+					if(message_load_more(n) == 0)
+					{ // no more to load
+						chat_scroll_max = processed_lines;
+						if(!reprinted++)
+							goto reprint;
+						break;
+					}
+					min_i = getter_int(n,INT_MIN,-1,offsetof(struct peer_list,min_i)); // alt: min_i += return of message_load_more(n)
+				}
+			}
 
+	}
 	// Print unsent
 	fy = mid + 1,fx = (screen_cols - inner_width)/2;
 	widget_next_has_default_focus(); // XXX Set default widget focus
