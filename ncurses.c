@@ -694,21 +694,40 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 			return lines;
 		const size_t printable_len = torx_allocation_len(message) - null_terminated_len - date_len - signature_len;
 		size_t anticipated_lines = 1 + print_wrapped(NULL,NULL,NULL,inner_width,message,printable_len);
-		size_t offset = 0;
 		if(win && ((anticipated_lines + processed_lines > must_be_processed_lines - height_of_scrollable) || must_be_processed_lines < height_of_scrollable))
 		{ // we are ACTUALLY printing
+			const size_t required_offset = chat_scroll_lines > processed_lines ? chat_scroll_lines - processed_lines : 0;
+			size_t truncation = 0; // number of characters truncated from the end
+			if(required_offset)
+			{ // Some of the message was already processed. Truncation required XXX Must do BEFORE calculating offset.
+				anticipated_lines -= required_offset; // XXX reducing anticipated lines from the end
+				size_t tmp_iter = 0;
+				for(size_t found_lines = 0; found_lines < anticipated_lines; found_lines++)
+				{ // Need to find point of necessary truncation, if applicable (printing only first part of message)
+					size_t iter = 0;
+					while(iter < inner_width && message[tmp_iter + iter] != '\n')
+						iter++;
+					tmp_iter += iter;
+				}
+				truncation = printable_len - tmp_iter;
+			}
 			const size_t available_lines = (must_be_processed_lines - processed_lines > height_of_scrollable) ? height_of_scrollable : must_be_processed_lines - processed_lines;
-			while(anticipated_lines > available_lines)
-			{ // Can only print latter part of message, must set offset
-				size_t iter = 0;
-				while(iter < inner_width && message[offset + iter] != '\n')
-					iter++;
-				offset += iter;
-				anticipated_lines--;
+			size_t offset = 0; // number of characters stripped from the start
+			if(anticipated_lines > available_lines)
+			{ // Can only print latter part of message. Offset required. XXX Must do AFTER calculating truncation.
+				for(size_t reduction_required = anticipated_lines - available_lines; reduction_required; reduction_required--)
+				{
+					size_t iter = 0;
+					while(iter < inner_width && message[offset + iter] != '\n')
+						iter++;
+					offset += iter;
+				}
+				anticipated_lines = available_lines; // XXX reducing anticipated lines from the start
 			}
 			size_t fx = (screen_cols - inner_width)/2;
 			size_t fy = top_line + available_lines - anticipated_lines;
-			lines += 1 + print_wrapped(win,&fy,&fx,inner_width,&message[offset],printable_len - offset);
+			lines = 1 + required_offset + print_wrapped(win,&fy,&fx,inner_width,&message[offset],printable_len - offset - truncation);
+		//	error_printf(0,"Checkpoint printed-lines: %lu out of anticipated: %lu into available: %lu in scrollable height: %lu chat_scroll_lines: %lu processed: %lu must-be: %lu msg: %s",lines,anticipated_lines,available_lines,height_of_scrollable,chat_scroll_lines,processed_lines,must_be_processed_lines,&message[offset]);
 		}
 		else // not actually printing
 			lines = anticipated_lines;
@@ -843,8 +862,7 @@ static void draw_chat(const int n)
 	uint8_t reprinted = 0;
 	reprint: {}
 	if(reprinted)
-	{ // Clear what we already printed, have to print again because we hit the end
-		error_simple(0,"Checkpoint reprinting");
+	{ // Clear what we already printed. This is ONLY triggered when we scroll ALL the way to the top.
 		chat_scroll_lines = chat_scroll_max - chat_scroll_jump;
 		const size_t edge = (screen_cols - inner_width)/2;
 		for(size_t y = 0; y < chat_scroll_jump; y++)
@@ -861,10 +879,10 @@ static void draw_chat(const int n)
 			page = group[g].msg_last;
 			pthread_rwlock_unlock(&mutex_expand_group); // 🟩
 			for(; page && must_be_processed_lines > processed_lines; page = page->message_prior)
-			{
+			{ // Do not modify logic without extensive testing!
 				processed_lines += print_message(window_chat,TOP_LINE_HEIGHT,chat_scroll_jump,must_be_processed_lines,processed_lines,page->n,page->i);
 				if(page->message_prior == NULL && message_load_more(n) == 0)
-				{ // no more to load
+				{ // no more to load. This is rarely triggered!
 					chat_scroll_max = processed_lines;
 					if(!reprinted++)
 						goto reprint;
@@ -874,12 +892,12 @@ static void draw_chat(const int n)
 		}
 		else
 			for(int i = max_i; i >= min_i && must_be_processed_lines > processed_lines; i--)
-			{
+			{ // Do not modify logic without extensive testing!
 				processed_lines += print_message(window_chat,TOP_LINE_HEIGHT,chat_scroll_jump,must_be_processed_lines,processed_lines,n,i);
 				if(i == min_i)
 				{ // no older messages loaded
 					if(message_load_more(n) == 0)
-					{ // no more to load
+					{ // no more to load. This is rarely triggered!
 						chat_scroll_max = processed_lines;
 						if(!reprinted++)
 							goto reprint;
@@ -888,7 +906,6 @@ static void draw_chat(const int n)
 					min_i = getter_int(n,INT_MIN,-1,offsetof(struct peer_list,min_i)); // alt: min_i += return of message_load_more(n)
 				}
 			}
-
 	}
 	// Print unsent
 	fy = mid + 1,fx = (screen_cols - inner_width)/2;
