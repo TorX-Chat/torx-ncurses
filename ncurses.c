@@ -189,6 +189,11 @@ static inline size_t print_wrapped(WINDOW *win,size_t *y,size_t *x,const size_t 
 				mvwaddch(win, (int)(*y + offset_y), (int)(*x + offset_x), (chtype)str[iter]);
 			offset_x++;
 		}
+		if(offset_x == max_width)
+		{ // Important for cursor position
+			offset_y++;
+			offset_x = 0;
+		}
 		if(y)
 			*y = *y + offset_y;
 		if(x)
@@ -349,14 +354,9 @@ static int widget_text_entry(WINDOW *win,size_t *y,size_t *x,const size_t max_wi
 	{
 		if(type != WIDGET_INPUT_MULTI_LINE)
 			wattroff(win, A_REVERSE); // highlight off
-		size_t vrow = 0, vcol = 0;
-		print_wrapped(NULL,&vrow, &vcol, max_width, *text_p, cursor_pos ? *cursor_pos : 0);
-		if(type == WIDGET_INPUT_MULTI_LINE && vcol == max_width)
-		{ // Place cursor below when line is filled // XXX jaiofsdi23f02f90dsf
-			vrow++;
-			vcol = 0;
-		}
-		widget_set_cursor(start_y + vrow, start_x + vcol);
+		size_t row = start_y, col = start_x;
+		print_wrapped(NULL,&row, &col, max_width, *text_p, cursor_pos ? *cursor_pos : 0);
+		widget_set_cursor(row, col);
 		curs_set(1);
 	}
 	else
@@ -410,11 +410,25 @@ static int keypress(const int w,const int ch)
 	{
 		if(widget[w].type == WIDGET_INPUT_MULTI_LINE)
 		{
-			const size_t current_row = *widget[w].cursor / widget[w].max_width;
-			const size_t current_col = *widget[w].cursor % widget[w].max_width;
-			const size_t new_row = current_row ? current_row - 1 : 0;
-			const size_t new_col = current_row ? current_col : 0;
-			*widget[w].cursor = new_row * widget[w].max_width + new_col;
+			if(*widget[w].cursor == 0)
+				return 0; // Can't go further
+			size_t starting_row = 0, starting_col = 0;
+			print_wrapped(NULL, &starting_row, &starting_col, widget[w].max_width, *widget[w].text, *widget[w].cursor);
+			size_t new_cursor = *widget[w].cursor - 1;
+			for(size_t end_of_first_line = 900000; new_cursor; new_cursor--)
+			{ // Will run at least once
+				size_t present_row = 0, present_col = 0;
+				print_wrapped(NULL, &present_row, &present_col, widget[w].max_width, *widget[w].text, new_cursor);
+				if(present_row < starting_row - 1 || (present_row == starting_row - 1 && present_col == starting_col))
+				{
+					if(present_row < starting_row - 1)
+						new_cursor = end_of_first_line; // too far, go back to end of prior line
+					break;
+				}
+				else if(end_of_first_line == 900000 && present_row == starting_row - 1)
+					end_of_first_line = new_cursor;
+			}
+			*widget[w].cursor = new_cursor;
 			return 1;
 		}
 		else if(*current_focus > 0)
@@ -425,13 +439,23 @@ static int keypress(const int w,const int ch)
 	{
 		if(widget[w].type == WIDGET_INPUT_MULTI_LINE)
 		{
-			const size_t current_row = *widget[w].cursor / widget[w].max_width;
-			const size_t current_col = *widget[w].cursor % widget[w].max_width;
-			const size_t max_row = torx_allocation_len(*widget[w].text) / widget[w].max_width;
-			const size_t max_col = torx_allocation_len(*widget[w].text) % widget[w].max_width;
-			const size_t new_row = max_row > current_row ? current_row + 1 : current_row;
-			const size_t new_col = (new_row == current_row || (new_row == max_row && current_col > max_col)) ? max_col : current_col;
-			*widget[w].cursor = new_row * widget[w].max_width + new_col;
+			if(*widget[w].cursor + 1 == torx_allocation_len(*widget[w].text))
+				return 0; // Can't go further
+			size_t starting_row = 0, starting_col = 0;
+			print_wrapped(NULL, &starting_row, &starting_col, widget[w].max_width, *widget[w].text, *widget[w].cursor);
+			size_t new_cursor = *widget[w].cursor + 1;
+			for(; new_cursor < torx_allocation_len(*widget[w].text); new_cursor++)
+			{ // Will run at least once
+				size_t present_row = 0, present_col = 0;
+				print_wrapped(NULL, &present_row, &present_col, widget[w].max_width, *widget[w].text, new_cursor);
+				if(present_row > starting_row + 1 || (present_row == starting_row + 1 && present_col == starting_col))
+				{
+					if(present_row > starting_row + 1)
+						new_cursor--; // too far, go back to start of prior line
+					break;
+				}
+			}
+			*widget[w].cursor = new_cursor;
 			return 1;
 		}
 		else if(*current_focus < (int)(torx_allocation_len(widget) / sizeof(struct widget) - 1))
@@ -550,7 +574,7 @@ static void draw_login(void)
 
 	size_t fy = 0, fx = 2;
 	char text_enter_password[] = " Welcome to TorX ";
-	print_wrapped(window_login, &fy,&fx,screen_cols-(fx*2),text_enter_password,sizeof(text_enter_password)-1);
+	print_wrapped(window_login,&fy,&fx,screen_cols-(fx*2),text_enter_password,sizeof(text_enter_password)-1);
 	char text_password[] = "Password:";
 	fy += 2, fx = 2; // fy must be += because there might be wrap
 	print_wrapped(window_login,&fy,&fx,screen_cols-(fx*2),text_password,sizeof(text_password)-1);
@@ -616,7 +640,7 @@ static void draw_contacts(void)
 	widget_button(window_contacts,&fy,&fx,strlen(groups_label),callback_contacts_groups,groups_label);
 
 	const char settings_label[] = "[ Settings ]";
-	fy += 1,fx = screen_cols - (sizeof(settings_label) - 1) - 3;
+	fx = screen_cols - (sizeof(settings_label) - 1) - 3;
 	widget_button(window_contacts,&fy,&fx,(sizeof(settings_label) - 1),NULL,settings_label); // TODO set a callback
 
 	int len = 0;
@@ -808,10 +832,7 @@ static void draw_chat(const int n)
 	else if(t_peer[n].unsent_pos >= torx_allocation_len(t_peer[n].unsent))
 		t_peer[n].unsent_pos = torx_allocation_len(t_peer[n].unsent) - 1;
 
-	size_t vcol = 0;
-	size_t visual_lines = 1 + print_wrapped(NULL,NULL, &vcol, inner_width, t_peer[n].unsent, torx_allocation_len(t_peer[n].unsent)); // alt: t_peer[n].unsent_pos
-	if(vcol == inner_width) // prepare one extra line because this is a WIDGET_INPUT_MULTI_LINE
-		visual_lines++; // XXX jaiofsdi23f02f90dsf
+	const size_t visual_lines = 1 + print_wrapped(NULL,NULL, NULL, inner_width, t_peer[n].unsent, torx_allocation_len(t_peer[n].unsent)); // alt: t_peer[n].unsent_pos
 
 	// Draw horizontal divider
 	const size_t mid = screen_rows - visual_lines - 2;
@@ -831,11 +852,11 @@ static void draw_chat(const int n)
 	torx_free((void*)&peernick);
 
 	const char settings_label[] = "[ Settings ]";
-	fx = screen_cols - (sizeof(settings_label) - 1) - 3;
+	fy = 0,fx = screen_cols - (sizeof(settings_label) - 1) - 3;
 	widget_button(window_chat,&fy,&fx,(sizeof(settings_label) - 1),NULL,settings_label); // TODO set a callback
 
 	const char actions_label[] = "[ Actions ]";
-	fx = screen_cols - (sizeof(actions_label) - 1) - 1 - (sizeof(settings_label) - 1) - 3;
+	fy = 0,fx = screen_cols - (sizeof(actions_label) - 1) - 1 - (sizeof(settings_label) - 1) - 3;
 	widget_button(window_chat,&fy,&fx,(sizeof(actions_label) - 1),NULL,actions_label); // TODO set a callback
 
 	// Get chat history height
