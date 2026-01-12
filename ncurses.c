@@ -328,7 +328,9 @@ static int widget_checkbox(WINDOW *win,size_t *y,size_t *x,const size_t max_widt
 	return w;
 }
 
-static int widget_text_entry(WINDOW *win,size_t *y,size_t *x,const size_t max_width,int (*callback)(const int,const int),const int type,char **text_p,size_t *cursor_pos)
+static size_t prior_print_start = 0; // TODO this should really be per peer, but this isn't just for message entry. Can't have it per widget because widgets get destroyed
+
+static int widget_text_entry(WINDOW *win,size_t *y,size_t *x,const size_t max_height,const size_t max_width,int (*callback)(const int,const int),const int type,char **text_p,size_t *cursor_pos)
 { // Draw a text entry. Single-line SHOULD highlight when selected. Multi-line should NOT highlight when selected.
 	if(type != WIDGET_PASSWORD && type != WIDGET_INPUT_SINGLE_LINE && type != WIDGET_INPUT_MULTI_LINE && type != WIDGET_INPUT_NUMERICAL)
 	{
@@ -349,13 +351,42 @@ static int widget_text_entry(WINDOW *win,size_t *y,size_t *x,const size_t max_wi
 	array[text_len] = '\0';
 	if(*current_focus == w && type != WIDGET_INPUT_MULTI_LINE)
 		wattron(win, A_REVERSE); // highlight on
-	print_wrapped(win,y,x,max_width,array,sizeof(array)-1);
+	const size_t cursor_line_of_whole = print_wrapped(NULL,NULL,NULL,max_width,array,cursor_pos ? *cursor_pos : 0);
+	size_t print_start = 0; // number of bytes cut off from start
+	size_t print_truncation = 0; // number of bytes cut off from end
+	size_t print_lines = 1 + print_wrapped(NULL,NULL,NULL,max_width,array,sizeof(array)-1);
+	if(print_lines > max_height)
+	{ // Our message exceeds box size
+		for(size_t lines_to_cut = print_lines - max_height, first_line = 0, last_line,reduction_in_lines; lines_to_cut; lines_to_cut -= reduction_in_lines,print_lines -= reduction_in_lines)
+		{ // Must cut off another line
+			last_line = first_line + max_height - 1;
+			size_t new_print_lines;
+			uint8_t shifting_forward;
+			do {
+				if(cursor_line_of_whole > last_line || (cursor_line_of_whole > first_line && print_start < prior_print_start))
+				{ // 1st: Scroll down
+					print_start++; // Can only safely go ++
+					shifting_forward = 1;
+				}
+				else
+				{ // 2nd: Cut off the excess
+					print_truncation += lines_to_cut; // Can safely and efficienctly go this far
+					shifting_forward = 0;
+				}
+			} while((new_print_lines = 1 + print_wrapped(NULL,NULL,NULL,max_width,&array[print_start],sizeof(array)-1-print_start-print_truncation)) == print_lines);
+			reduction_in_lines = print_lines - new_print_lines;
+			if(shifting_forward)
+				first_line += reduction_in_lines;
+		}
+	}
+	prior_print_start = print_start;
+	print_wrapped(win,y,x,max_width,&array[print_start],sizeof(array)-1-print_start-print_truncation);
 	if(*current_focus == w)
 	{
 		if(type != WIDGET_INPUT_MULTI_LINE)
 			wattroff(win, A_REVERSE); // highlight off
 		size_t row = start_y, col = start_x;
-		print_wrapped(NULL,&row, &col, max_width, *text_p, cursor_pos ? *cursor_pos : 0);
+		print_wrapped(NULL,&row, &col, max_width, &(*text_p)[print_start], cursor_pos ? *cursor_pos - print_start: 0);
 		widget_set_cursor(row, col);
 		curs_set(1);
 	}
@@ -382,6 +413,52 @@ static int callback_password(const int w,const int ch)
 	return 1; // Rebuild
 }
 
+static int move_cursor_up(const int w)
+{
+	if(*widget[w].cursor == 0)
+		return 0; // Can't go further
+	size_t starting_row = 0, starting_col = 0;
+	print_wrapped(NULL, &starting_row, &starting_col, widget[w].max_width, *widget[w].text, *widget[w].cursor);
+	size_t new_cursor = *widget[w].cursor - 1;
+	for(size_t end_of_first_line = 900000; new_cursor; new_cursor--)
+	{ // Will run at least once
+		size_t present_row = 0, present_col = 0;
+		print_wrapped(NULL, &present_row, &present_col, widget[w].max_width, *widget[w].text, new_cursor);
+		if(present_row < starting_row - 1 || (present_row == starting_row - 1 && present_col == starting_col))
+		{
+			if(present_row < starting_row - 1)
+				new_cursor = end_of_first_line; // too far, go back to end of prior line
+			break;
+		}
+		else if(end_of_first_line == 900000 && present_row == starting_row - 1)
+			end_of_first_line = new_cursor;
+	}
+	*widget[w].cursor = new_cursor;
+	return 1;
+}
+
+static int move_cursor_down(const int w)
+{
+	if(*widget[w].cursor + 1 == torx_allocation_len(*widget[w].text))
+		return 0; // Can't go further
+	size_t starting_row = 0, starting_col = 0;
+	print_wrapped(NULL, &starting_row, &starting_col, widget[w].max_width, *widget[w].text, *widget[w].cursor);
+	size_t new_cursor = *widget[w].cursor + 1;
+	for(; new_cursor < torx_allocation_len(*widget[w].text); new_cursor++)
+	{ // Will run at least once
+		size_t present_row = 0, present_col = 0;
+		print_wrapped(NULL, &present_row, &present_col, widget[w].max_width, *widget[w].text, new_cursor);
+		if(present_row > starting_row + 1 || (present_row == starting_row + 1 && present_col == starting_col))
+		{
+			if(present_row > starting_row + 1)
+				new_cursor--; // too far, go back to start of prior line
+			break;
+		}
+	}
+	*widget[w].cursor = new_cursor;
+	return 1;
+}
+
 static int keypress(const int w,const int ch)
 { // replace with callback_message_input ?
 	if(w < 0 || w >= (int)(torx_allocation_len(widget) / sizeof(struct widget)))
@@ -389,6 +466,7 @@ static int keypress(const int w,const int ch)
 		error_printf(0,"Keypress called on possibly invalid widget: %lu of %lu",w,torx_allocation_len(widget) / sizeof(struct widget));
 		return 0; // Sanity check
 	}
+	const size_t max_height = screen_rows - 3; // TODO this should be specific to each page
 	if(ch == KEY_ESC || ch == KEY_HOME)
 	{ // Go back or exit
 		if(window_login || window_contacts)
@@ -406,31 +484,26 @@ static int keypress(const int w,const int ch)
 		*current_focus = (*current_focus + 1) % (int)(torx_allocation_len(widget) / sizeof(struct widget));
 		return 1; // Rebuild
 	}
+	else if((ch == KEY_PPAGE || ch == KEY_NPAGE) && widget[w].type == WIDGET_INPUT_MULTI_LINE && 1 + print_wrapped(NULL, NULL, NULL, widget[w].max_width, *widget[w].text, torx_allocation_len(*widget[w].text)-1) >= max_height)
+	{ // PgUp / PgDwn (NOTE: Not just handled here)
+		if(ch == KEY_PPAGE)
+		{
+			for(size_t count = 0; count < max_height; count++)
+				if(!move_cursor_up(w))
+					break;
+		}
+		else // if(ch == KEY_NPAGE)
+		{
+			for(size_t count = 0; count < max_height; count++)
+				if(!move_cursor_down(w))
+					break;
+		}
+		return 1;
+	}
 	else if(ch == KEY_UP)
 	{
 		if(widget[w].type == WIDGET_INPUT_MULTI_LINE)
-		{
-			if(*widget[w].cursor == 0)
-				return 0; // Can't go further
-			size_t starting_row = 0, starting_col = 0;
-			print_wrapped(NULL, &starting_row, &starting_col, widget[w].max_width, *widget[w].text, *widget[w].cursor);
-			size_t new_cursor = *widget[w].cursor - 1;
-			for(size_t end_of_first_line = 900000; new_cursor; new_cursor--)
-			{ // Will run at least once
-				size_t present_row = 0, present_col = 0;
-				print_wrapped(NULL, &present_row, &present_col, widget[w].max_width, *widget[w].text, new_cursor);
-				if(present_row < starting_row - 1 || (present_row == starting_row - 1 && present_col == starting_col))
-				{
-					if(present_row < starting_row - 1)
-						new_cursor = end_of_first_line; // too far, go back to end of prior line
-					break;
-				}
-				else if(end_of_first_line == 900000 && present_row == starting_row - 1)
-					end_of_first_line = new_cursor;
-			}
-			*widget[w].cursor = new_cursor;
-			return 1;
-		}
+			return move_cursor_up(w);
 		else if(*current_focus > 0)
 			*current_focus = *current_focus - 1;
 		return 1; // Rebuild
@@ -438,26 +511,7 @@ static int keypress(const int w,const int ch)
 	else if(ch == KEY_DOWN)
 	{
 		if(widget[w].type == WIDGET_INPUT_MULTI_LINE)
-		{
-			if(*widget[w].cursor + 1 == torx_allocation_len(*widget[w].text))
-				return 0; // Can't go further
-			size_t starting_row = 0, starting_col = 0;
-			print_wrapped(NULL, &starting_row, &starting_col, widget[w].max_width, *widget[w].text, *widget[w].cursor);
-			size_t new_cursor = *widget[w].cursor + 1;
-			for(; new_cursor < torx_allocation_len(*widget[w].text); new_cursor++)
-			{ // Will run at least once
-				size_t present_row = 0, present_col = 0;
-				print_wrapped(NULL, &present_row, &present_col, widget[w].max_width, *widget[w].text, new_cursor);
-				if(present_row > starting_row + 1 || (present_row == starting_row + 1 && present_col == starting_col))
-				{
-					if(present_row > starting_row + 1)
-						new_cursor--; // too far, go back to start of prior line
-					break;
-				}
-			}
-			*widget[w].cursor = new_cursor;
-			return 1;
-		}
+			return move_cursor_down(w);
 		else if(*current_focus < (int)(torx_allocation_len(widget) / sizeof(struct widget) - 1))
 			*current_focus = *current_focus + 1;
 		return 1; // Rebuild
@@ -581,7 +635,7 @@ static void draw_login(void)
 
 	fy += 1, fx = 4; // fy must be += because there might be wrap
 	widget_next_has_default_focus(); // XXX Set default widget focus
-	widget_text_entry(window_login,&fy,&fx,screen_cols-(fx*2),callback_password,WIDGET_PASSWORD,&password,&pw_cursor);
+	widget_text_entry(window_login,&fy,&fx,screen_rows-fy,screen_cols-(fx*2),callback_password,WIDGET_PASSWORD,&password,&pw_cursor);
 
 	fy += 2,fx = 4; // fy must be += because there might be wrap
 	widget_checkbox(window_login,&fy,&fx,screen_cols-(fx*2),callback_pw_show,1,"Show Password",pw_show);
@@ -835,7 +889,7 @@ static void draw_chat(const int n)
 	const size_t visual_lines = 1 + print_wrapped(NULL,NULL, NULL, inner_width, t_peer[n].unsent, torx_allocation_len(t_peer[n].unsent)); // alt: t_peer[n].unsent_pos
 
 	// Draw horizontal divider
-	const size_t mid = screen_rows - visual_lines - 2;
+	const size_t mid = visual_lines + 2 + TOP_LINE_HEIGHT >= screen_rows ? TOP_LINE_HEIGHT : screen_rows - visual_lines - 2;
 	for(size_t x = 1; x < screen_cols - 1; x++)
 		mvwaddch(window_chat, (int)mid, (int)x, ACS_HLINE);
 	// Draw intersection characters
@@ -931,7 +985,7 @@ static void draw_chat(const int n)
 	// Print unsent
 	fy = mid + 1,fx = (screen_cols - inner_width)/2;
 	widget_next_has_default_focus(); // XXX Set default widget focus
-	widget_text_entry(window_chat,&fy,&fx,inner_width,callback_message_input,WIDGET_INPUT_MULTI_LINE,&t_peer[n].unsent,&t_peer[n].unsent_pos);
+	widget_text_entry(window_chat,&fy,&fx,screen_rows - mid - 2,inner_width,callback_message_input,WIDGET_INPUT_MULTI_LINE,&t_peer[n].unsent,&t_peer[n].unsent_pos);
 
 	widget_draw_cursor(window_chat); // XXX Must do last
 }
