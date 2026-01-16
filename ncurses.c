@@ -179,6 +179,7 @@ static bool groups_mode = false;
 static int list_first_peer_w = -1; // must initialize as -1 // This facilitates left-right navigation between peerlist and settings buttons
 
 /* Settings state */
+static size_t settings_scroll_offset = 0;
 static char *tmp_snowflake_location = NULL;
 static char *tmp_lyrebird_location = NULL;
 static char *tmp_conjure_location = NULL;
@@ -210,6 +211,180 @@ static void signal_resize(int sig)
 	resized = 1;
 	++resize_seq;
 }
+
+static char language[5+1] = {0};
+const char* languages_available_name[] = {"English","中文",NULL};
+const char* languages_available_code[] = {"en_US","zh_CN",NULL};
+
+/* Global Text Declarations for ui_initialize_language() */
+static const char *text_title = {0};
+static const char *text_welcome = {0};
+static const char *text_transfer_completed = {0};
+static const char *text_online = {0};
+static const char *text_new_friend = {0};
+static const char *text_accepted_file = {0};
+static const char *text_spoiled = {0};
+static const char *text_placeholder_privkey = {0};
+static const char *text_placeholder_identifier = {0};
+static const char *text_placeholder_add_identifier = {0};
+static const char *text_placeholder_add_onion = {0};
+static const char *text_placeholder_add_group_identifier = {0};
+static const char *text_placeholder_add_group_id = {0};
+static const char *text_placeholder_search = {0};
+static const char *text_dark = {0};
+static const char *text_light = {0};
+static const char *text_minimize_to_tray = {0};
+static const char *text_generate_onionid = {0};
+static const char *text_generate_torxid = {0};
+static const char *text_disable = {0};
+static const char *text_enable = {0};
+static const char *text_leave_after = {0};
+static const char *text_delete_after = {0};
+static const char *text_select = {0};
+static const char *text_save_sing = {0};
+static const char *text_save_mult = {0};
+static const char *text_emit_global_kill = {0};
+static const char *text_vertical_emit_global_kill = {0};
+static const char *text_peer = {0};
+static const char *text_group = {0};
+static const char *text_group_offer = {0};
+static const char *text_audio_message = {0};
+static const char *text_audio_call = {0};
+static const char *text_sticker = {0};
+static const char *text_current_members = {0};
+static const char *text_group_public = {0};
+static const char *text_group_private = {0};
+static const char *text_block = {0};
+static const char *text_unblock = {0};
+static const char *text_ignore = {0};
+static const char *text_unignore = {0};
+static const char *text_edit = {0};
+static const char *text_incoming = {0};
+static const char *text_outgoing = {0};
+static const char *text_active_mult = {0};
+static const char *text_active_sing = {0};
+static const char *text_you = {0};
+static const char *text_queued = {0};
+static const char *text_draft = {0};
+static const char *text_accept = {0};
+static const char *text_reject = {0};
+static const char *text_copy = {0};
+static const char *text_resend = {0};
+static const char *text_start = {0};
+static const char *text_pause = {0};
+static const char *text_choose_file = {0};
+static const char *text_choose_files = {0};
+static const char *text_choose_folder = {0};
+static const char *text_open_folder = {0}; // TODO implement after 4.10 drops
+static const char *text_cancel = {0};
+static const char *text_transfer_paused = {0};
+static const char *text_transfer_rejected = {0};
+static const char *text_transfer_cancelled = {0};
+static const char *text_show_qr = {0};
+static const char *text_save_qr = {0};
+static const char *text_copy_qr = {0};
+static const char *text_delete = {0};
+static const char *text_delete_log = {0};
+static const char *text_hold_to_talk = {0};
+static const char *text_cancel_editing = {0};
+static const char *text_private_messaging = {0};
+static const char *text_rename = {0};
+static const char *text_button_add = {0};
+static const char *text_button_join = {0};
+static const char *text_button_sing = {0};
+static const char *text_button_mult = {0};
+static const char *text_button_generate_invite = {0};
+static const char *text_button_generate_public = {0};
+static const char *text_wait = {0};
+static const char *text_tooltip_image_header_0 = {0};
+static const char *text_tooltip_image_header_1 = {0};
+static const char *text_tooltip_image_header_2 = {0};
+static const char *text_tooltip_image_header_3 = {0};
+static const char *text_tooltip_image_header_4 = {0};
+static const char *text_tooltip_image_header_5 = {0};
+static const char *text_tooltip_image_header_6 = {0};
+static const char *text_tooltip_image_header_7 = {0};
+static const char *text_tooltip_image_header_8 = {0};
+static const char *text_tooltip_image_header_9 = {0};
+static const char *text_tooltip_logging_disabled = {0};
+static const char *text_tooltip_logging_enabled = {0};
+static const char *text_tooltip_logging_global_on = {0};
+static const char *text_tooltip_logging_global_off = {0};
+static const char *text_tooltip_notifications_off = {0};
+static const char *text_tooltip_notifications_on = {0};
+static const char *text_tooltip_blocked_on = {0};
+static const char *text_tooltip_blocked_off = {0};
+static const char *text_tooltip_button_select_custom = {0};
+static const char *text_tooltip_button_custom_sing = {0};
+static const char *text_tooltip_button_custom_mult = {0};
+static const char *text_tooltip_group_or_user_name = {0};
+static const char *text_tooltip_button_kill = {0};
+static const char *text_tooltip_button_delete = {0};
+static const char *text_tooltip_button_delete_log = {0};
+static const char *text_status_online = {0};
+static const char *text_of = {0};
+static const char *text_status_last_seen = {0};
+static const char *text_status_never = {0};
+static const char *text_edit_torrc = {0};
+static const char *text_saving_will_restart_tor = {0};
+static const char *text_save = {0};
+static const char *text_override = {0};
+static const char *text_change_password = {0};
+//static const char *text_resume_interupted = {0};
+static const char *text_old_password = {0};
+static const char *text_new_password = {0};
+static const char *text_new_password_again = {0};
+static const char *text_settings = {0};
+static const char *text_set_select_theme = {0};
+static const char *text_set_select_language = {0};
+static const char *text_set_onionid_or_torxid = {0};
+static const char *text_set_global_log = {0};
+static const char *text_set_auto_resume_inbound = {0};
+static const char *text_set_stickers_save_all = {0};
+static const char *text_set_download_directory = {0};
+static const char *text_tor = {0};
+static const char *text_snowflake = {0};
+static const char *text_lyrebird = {0};
+static const char *text_conjure = {0};
+static const char *text_binary_location = {0};
+static const char *text_set_cpu = {0};
+static const char *text_set_suffix = {0};
+static const char *text_set_validity_sing = {0};
+static const char *text_set_validity_mult = {0};
+static const char *text_set_auto_mult = {0};
+static const char *text_set_tor_port_socks = {0};
+static const char *text_set_tor_port_ctrl = {0};
+static const char *text_set_tor_password = {0};
+static const char *text_set_externally_generated = {0};
+static const char *text_tor_log = {0};
+static const char *text_torx_log = {0};
+static const char *text_global_kill = {0};
+static const char *text_global_kill_warning = {0};
+static const char *text_home = {0};
+static const char *text_add_generate = {0};
+static const char *text_add_peer_by = {0};
+static const char *text_add_group_by = {0};
+static const char *text_generate_for = {0};
+static const char *text_generate_group_for = {0};
+static const char *text_qr_code = {0};
+static const char *text_enter_password = {0};
+static const char *text_enter = {0};
+static const char *text_incorrect = {0};
+static const char *text_debug_level = {0};
+static const char *text_debug_level_notice = {0};
+static const char *text_fatal_error = {0};
+static const char *text_active = {0};
+static const char *text_identifier = {0};
+static const char *text_onionid = {0};
+static const char *text_torxid = {0};
+static const char *text_invitor = {0};
+static const char *text_groupid = {0};
+static const char *text_successfully_created_group = {0};
+static const char *text_error_creating_group = {0};
+static const char *text_censored_region = {0};
+static const char *text_invite_friend = {0};  // unused in GTK
+static const char *text_group_peers = {0}; // unused in GTK
+static const char *text_incoming_call = {0};
 
 #define wmove_size(win, y, x) wmove(win, (int)(y), (int)(x))
 #define newwin_size(nlines, ncols, begin_y, begin_x) newwin((int)(nlines), (int)(ncols), (int)(begin_y), (int)(begin_x))
@@ -557,7 +732,7 @@ static int move_cursor_down(const int w)
 static int keypress(const int w,const int ch)
 {
 	if(w < 0 || w >= (int)(torx_allocation_len(widget) / sizeof(struct widget)))
-	{
+	{ // XXX Due to zero indexing, it will likely show "10 of 10" which is indeed an error.
 		error_printf(0,"Keypress called on possibly invalid widget: %lu of %lu",w,torx_allocation_len(widget) / sizeof(struct widget));
 		return 0; // Sanity check
 	}
@@ -750,8 +925,7 @@ static void draw_login(void)
 	window_prepare(&window_login,&focus_login); // XXX Must do first
 
 	size_t fy = 0, fx = 2;
-	char text_enter_password[] = " Welcome to TorX ";
-	print_wrapped(window_login,&fy,&fx,screen_cols-(fx*2),text_enter_password,sizeof(text_enter_password)-1);
+	print_wrapped(window_login,&fy,&fx,screen_cols-(fx*2),text_welcome,strlen(text_welcome));
 	char text_password[] = "Password:";
 	fy += 2, fx = 2; // fy must be += because there might be wrap
 	print_wrapped(window_login,&fy,&fx,screen_cols-(fx*2),text_password,sizeof(text_password)-1);
@@ -772,180 +946,6 @@ static void draw_login(void)
 
 	widget_draw_cursor(window_login); // XXX Must do last
 }
-
-static char language[5+1] = {0};
-const char* languages_available_name[] = {"English","中文",NULL};
-const char* languages_available_code[] = {"en_US","zh_CN",NULL};
-
-/* Global Text Declarations for ui_initialize_language() */
-static const char *text_title = {0};
-static const char *text_welcome = {0};
-static const char *text_transfer_completed = {0};
-static const char *text_online = {0};
-static const char *text_new_friend = {0};
-static const char *text_accepted_file = {0};
-static const char *text_spoiled = {0};
-static const char *text_placeholder_privkey = {0};
-static const char *text_placeholder_identifier = {0};
-static const char *text_placeholder_add_identifier = {0};
-static const char *text_placeholder_add_onion = {0};
-static const char *text_placeholder_add_group_identifier = {0};
-static const char *text_placeholder_add_group_id = {0};
-static const char *text_placeholder_search = {0};
-static const char *text_dark = {0};
-static const char *text_light = {0};
-static const char *text_minimize_to_tray = {0};
-static const char *text_generate_onionid = {0};
-static const char *text_generate_torxid = {0};
-static const char *text_disable = {0};
-static const char *text_enable = {0};
-static const char *text_leave_after = {0};
-static const char *text_delete_after = {0};
-static const char *text_select = {0};
-static const char *text_save_sing = {0};
-static const char *text_save_mult = {0};
-static const char *text_emit_global_kill = {0};
-static const char *text_vertical_emit_global_kill = {0};
-static const char *text_peer = {0};
-static const char *text_group = {0};
-static const char *text_group_offer = {0};
-static const char *text_audio_message = {0};
-static const char *text_audio_call = {0};
-static const char *text_sticker = {0};
-static const char *text_current_members = {0};
-static const char *text_group_public = {0};
-static const char *text_group_private = {0};
-static const char *text_block = {0};
-static const char *text_unblock = {0};
-static const char *text_ignore = {0};
-static const char *text_unignore = {0};
-static const char *text_edit = {0};
-static const char *text_incoming = {0};
-static const char *text_outgoing = {0};
-static const char *text_active_mult = {0};
-static const char *text_active_sing = {0};
-static const char *text_you = {0};
-static const char *text_queued = {0};
-static const char *text_draft = {0};
-static const char *text_accept = {0};
-static const char *text_reject = {0};
-static const char *text_copy = {0};
-static const char *text_resend = {0};
-static const char *text_start = {0};
-static const char *text_pause = {0};
-static const char *text_choose_file = {0};
-static const char *text_choose_files = {0};
-static const char *text_choose_folder = {0};
-static const char *text_open_folder = {0}; // TODO implement after 4.10 drops
-static const char *text_cancel = {0};
-static const char *text_transfer_paused = {0};
-static const char *text_transfer_rejected = {0};
-static const char *text_transfer_cancelled = {0};
-static const char *text_show_qr = {0};
-static const char *text_save_qr = {0};
-static const char *text_copy_qr = {0};
-static const char *text_delete = {0};
-static const char *text_delete_log = {0};
-static const char *text_hold_to_talk = {0};
-static const char *text_cancel_editing = {0};
-static const char *text_private_messaging = {0};
-static const char *text_rename = {0};
-static const char *text_button_add = {0};
-static const char *text_button_join = {0};
-static const char *text_button_sing = {0};
-static const char *text_button_mult = {0};
-static const char *text_button_generate_invite = {0};
-static const char *text_button_generate_public = {0};
-static const char *text_wait = {0};
-static const char *text_tooltip_image_header_0 = {0};
-static const char *text_tooltip_image_header_1 = {0};
-static const char *text_tooltip_image_header_2 = {0};
-static const char *text_tooltip_image_header_3 = {0};
-static const char *text_tooltip_image_header_4 = {0};
-static const char *text_tooltip_image_header_5 = {0};
-static const char *text_tooltip_image_header_6 = {0};
-static const char *text_tooltip_image_header_7 = {0};
-static const char *text_tooltip_image_header_8 = {0};
-static const char *text_tooltip_image_header_9 = {0};
-static const char *text_tooltip_logging_disabled = {0};
-static const char *text_tooltip_logging_enabled = {0};
-static const char *text_tooltip_logging_global_on = {0};
-static const char *text_tooltip_logging_global_off = {0};
-static const char *text_tooltip_notifications_off = {0};
-static const char *text_tooltip_notifications_on = {0};
-static const char *text_tooltip_blocked_on = {0};
-static const char *text_tooltip_blocked_off = {0};
-static const char *text_tooltip_button_select_custom = {0};
-static const char *text_tooltip_button_custom_sing = {0};
-static const char *text_tooltip_button_custom_mult = {0};
-static const char *text_tooltip_group_or_user_name = {0};
-static const char *text_tooltip_button_kill = {0};
-static const char *text_tooltip_button_delete = {0};
-static const char *text_tooltip_button_delete_log = {0};
-static const char *text_status_online = {0};
-static const char *text_of = {0};
-static const char *text_status_last_seen = {0};
-static const char *text_status_never = {0};
-static const char *text_edit_torrc = {0};
-static const char *text_saving_will_restart_tor = {0};
-static const char *text_save = {0};
-static const char *text_override = {0};
-static const char *text_change_password = {0};
-//static const char *text_resume_interupted = {0};
-static const char *text_old_password = {0};
-static const char *text_new_password = {0};
-static const char *text_new_password_again = {0};
-static const char *text_settings = {0};
-static const char *text_set_select_theme = {0};
-static const char *text_set_select_language = {0};
-static const char *text_set_onionid_or_torxid = {0};
-static const char *text_set_global_log = {0};
-static const char *text_set_auto_resume_inbound = {0};
-static const char *text_set_stickers_save_all = {0};
-static const char *text_set_download_directory = {0};
-static const char *text_tor = {0};
-static const char *text_snowflake = {0};
-static const char *text_lyrebird = {0};
-static const char *text_conjure = {0};
-static const char *text_binary_location = {0};
-static const char *text_set_cpu = {0};
-static const char *text_set_suffix = {0};
-static const char *text_set_validity_sing = {0};
-static const char *text_set_validity_mult = {0};
-static const char *text_set_auto_mult = {0};
-static const char *text_set_tor_port_socks = {0};
-static const char *text_set_tor_port_ctrl = {0};
-static const char *text_set_tor_password = {0};
-static const char *text_set_externally_generated = {0};
-static const char *text_tor_log = {0};
-static const char *text_torx_log = {0};
-static const char *text_global_kill = {0};
-static const char *text_global_kill_warning = {0};
-static const char *text_home = {0};
-static const char *text_add_generate = {0};
-static const char *text_add_peer_by = {0};
-static const char *text_add_group_by = {0};
-static const char *text_generate_for = {0};
-static const char *text_generate_group_for = {0};
-static const char *text_qr_code = {0};
-static const char *text_enter_password = {0};
-static const char *text_enter = {0};
-static const char *text_incorrect = {0};
-static const char *text_debug_level = {0};
-static const char *text_debug_level_notice = {0};
-static const char *text_fatal_error = {0};
-static const char *text_active = {0};
-static const char *text_identifier = {0};
-static const char *text_onionid = {0};
-static const char *text_torxid = {0};
-static const char *text_invitor = {0};
-static const char *text_groupid = {0};
-static const char *text_successfully_created_group = {0};
-static const char *text_error_creating_group = {0};
-static const char *text_censored_region = {0};
-static const char *text_invite_friend = {0};  // unused in GTK
-static const char *text_group_peers = {0}; // unused in GTK
-static const char *text_incoming_call = {0};
 
 static void ui_initialize_language(void)
 {
@@ -1347,7 +1347,6 @@ static int callback_language(const int w,const int ch)
 		else
 			iter++;
 		snprintf(language,sizeof(language),"%s",languages_available_code[iter]);
-		error_printf(0,"Checkpoint language: %s len=%lu",languages_available_name[iter],strlen(languages_available_name[iter]));
 		sql_setting(1,-1,"language",language,strlen(language));
 		ui_initialize_language();
 	}
@@ -1478,7 +1477,7 @@ static int callback_threads(const int w,const int ch)
 			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
 			threads_max = (uint32_t)atoll(tmp_threads_max);
 			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			sql_setting(1,-1,"threads_max",tmp_threads_max,torx_allocation_len(tmp_threads_max)-1);
+			sql_setting(0,-1,"threads_max",tmp_threads_max,torx_allocation_len(tmp_threads_max)-1);
 		}
 	}
 	else
@@ -1496,7 +1495,7 @@ static int callback_suffix(const int w,const int ch)
 			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
 			suffix_length = (uint8_t)atoll(tmp_suffix_length);
 			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			sql_setting(1,-1,"suffix_length",tmp_suffix_length,torx_allocation_len(tmp_suffix_length)-1);
+			sql_setting(0,-1,"suffix_length",tmp_suffix_length,torx_allocation_len(tmp_suffix_length)-1);
 		}
 	}
 	else
@@ -1514,7 +1513,7 @@ static int callback_sing_days(const int w,const int ch)
 			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
 			sing_expiration_days = (uint32_t)atoll(tmp_sing_expiration_days);
 			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			sql_setting(1,-1,"sing_expiration_days",tmp_sing_expiration_days,torx_allocation_len(tmp_sing_expiration_days)-1);
+			sql_setting(0,-1,"sing_expiration_days",tmp_sing_expiration_days,torx_allocation_len(tmp_sing_expiration_days)-1);
 		}
 	}
 	else
@@ -1532,7 +1531,7 @@ static int callback_mult_dats(const int w,const int ch)
 			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
 			mult_expiration_days = (uint32_t)atoll(tmp_mult_expiration_days);
 			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			sql_setting(1,-1,"mult_expiration_days",tmp_mult_expiration_days,torx_allocation_len(tmp_mult_expiration_days)-1);
+			sql_setting(0,-1,"mult_expiration_days",tmp_mult_expiration_days,torx_allocation_len(tmp_mult_expiration_days)-1);
 		}
 	}
 	else
@@ -1550,8 +1549,15 @@ static int callback_auto_mult(const int w,const int ch)
 			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
 			auto_accept_mult = (uint8_t)atoll(tmp_auto_accept_mult);
 			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			sql_setting(1,-1,"auto_accept_mult",tmp_auto_accept_mult,torx_allocation_len(tmp_auto_accept_mult)-1);
+			sql_setting(0,-1,"auto_accept_mult",tmp_auto_accept_mult,torx_allocation_len(tmp_auto_accept_mult)-1);
 		}
+
+
+		const uint8_t toggled = !threadsafe_read_uint8(&mutex_global_variable,&auto_accept_mult);
+		threadsafe_write(&mutex_global_variable,&auto_accept_mult,&toggled,sizeof(toggled));
+		char p1[21];
+		snprintf(p1,sizeof(p1),"%u",toggled);
+		sql_setting(0,-1,"auto_accept_mult",p1,strlen(p1));
 	}
 	else
 		return 0; // Do not rebuild
@@ -1568,7 +1574,7 @@ static int callback_socks_port(const int w,const int ch)
 			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
 			tor_socks_port = (uint16_t)atoll(tmp_tor_socks_port);
 			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			sql_setting(1,-1,"tor_socks_port",tmp_tor_socks_port,torx_allocation_len(tmp_tor_socks_port)-1);
+			sql_setting(0,-1,"tor_socks_port",tmp_tor_socks_port,torx_allocation_len(tmp_tor_socks_port)-1);
 		}
 	}
 	else
@@ -1586,7 +1592,7 @@ static int callback_ctrl_port(const int w,const int ch)
 			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
 			tor_ctrl_port = (uint16_t)atoll(tmp_tor_ctrl_port);
 			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			sql_setting(1,-1,"tor_ctrl_port",tmp_tor_ctrl_port,torx_allocation_len(tmp_tor_ctrl_port)-1);
+			sql_setting(0,-1,"tor_ctrl_port",tmp_tor_ctrl_port,torx_allocation_len(tmp_tor_ctrl_port)-1);
 		}
 	}
 	else
@@ -1625,132 +1631,180 @@ static int callback_ctrl_pass(const int w,const int ch)
 	return 1; // Rebuild
 }
 
+static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_draw)
+{
+	if(win == window_settings)
+	{
+		const char *selected = "NULL"; // yes initialize as a string
+		char label_text[512]; // size is arbitrary
+		if(item_to_draw == 0)
+		{ // Select language
+			if(language[0] == '\0' || !strncmp(language,languages_available_code[0],5))
+				selected = languages_available_name[0];
+			else if(!strncmp(language,languages_available_code[1],5))
+				selected = languages_available_name[1];
+			*fyp += 2, *fxp = 2;
+			print_wrapped(window_settings, fyp, fxp, screen_cols-(*fxp*2), text_set_select_language, strlen(text_set_select_language));
+			*fyp += 1,*fxp = screen_cols - strlen(selected) - 2;
+			widget_button(window_settings,fyp,fxp,screen_cols-(2*2),callback_language,selected);
+		}
+		else if(item_to_draw == 1)
+		{ // Select color scheme
+			if(global_theme == LIGHT_THEME)
+				selected = text_light;
+			else
+				selected = text_dark;
+			*fyp += 2, *fxp = 2;
+			print_wrapped(window_settings, fyp, fxp, screen_cols-(*fxp*2), text_set_select_theme, strlen(text_set_select_theme));
+			*fyp += 1,*fxp = screen_cols - strlen(selected) - 2;
+			widget_button(window_settings,fyp,fxp,screen_cols-(2*2),callback_theme,selected);
+		}
+		else if(item_to_draw == 2)
+		{ // TorX-ID (<=52 char) or OnionID (56 char with checksum)
+			if(threadsafe_read_uint8(&mutex_global_variable,&shorten_torxids))
+				selected = text_generate_torxid;
+			else
+				selected = text_generate_onionid;
+			*fyp += 2, *fxp = 2;
+			print_wrapped(window_settings, fyp, fxp, screen_cols-(2*2), text_set_onionid_or_torxid, strlen(text_set_onionid_or_torxid));
+			*fyp += 1,*fxp = screen_cols - strlen(selected) - 2;
+			widget_button(window_settings,fyp,fxp,screen_cols-(2*2),callback_onionid_or_torxid,selected);
+		}
+		else if(item_to_draw == 3)
+		{ // Message Logging (Global Default)
+			if(threadsafe_read_uint8(&mutex_global_variable,&global_log_messages))
+				selected = text_enable;
+			else
+				selected = text_disable;
+			*fyp += 2, *fxp = 2;
+			print_wrapped(window_settings, fyp, fxp, screen_cols-(2*2), text_set_global_log, strlen(text_set_global_log));
+			*fyp += 1,*fxp = screen_cols - strlen(selected) - 2;
+			widget_button(window_settings,fyp,fxp,screen_cols-(2*2),callback_global_log_messages,selected);
+		}
+		else if(item_to_draw == 4)
+		{ // Select Tor binary location (effective immediately)
+			snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_tor,text_binary_location);
+			*fyp += 2, *fxp = 2;
+			print_wrapped(window_settings, fyp, fxp, screen_cols-(2*2), label_text, strlen(label_text));
+			*fyp += 1,*fxp = screen_cols - (tmp_tor_location ? strlen(tmp_tor_location) : 0) - 2;
+			widget_text_entry(window_settings,fyp,fxp,1,screen_cols-(2*2),callback_tor_location,WIDGET_INPUT_SINGLE_LINE,&tmp_tor_location,&tmp_tor_location_pos);
+		}
+		else if(item_to_draw == 5)
+		{ // Select Snowflake binary location (effective immediately)
+			snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_snowflake,text_binary_location);
+			*fyp += 2, *fxp = 2;
+			print_wrapped(window_settings, fyp, fxp, screen_cols-(2*2), label_text, strlen(label_text));
+			*fyp += 1,*fxp = screen_cols - (tmp_snowflake_location ? strlen(tmp_snowflake_location) : 0) - 2;
+			widget_text_entry(window_settings,fyp,fxp,1,screen_cols-(2*2),callback_snowflake_location,WIDGET_INPUT_SINGLE_LINE,&tmp_snowflake_location,&tmp_snowflake_location_pos);
+		}
+		else if(item_to_draw == 6)
+		{ // Select Lyrebird binary location (effective immediately)
+			snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_lyrebird,text_binary_location);
+			*fyp += 2, *fxp = 2;
+			print_wrapped(window_settings, fyp, fxp, screen_cols-(2*2), label_text, strlen(label_text));
+			*fyp += 1,*fxp = screen_cols - (tmp_lyrebird_location ? strlen(tmp_lyrebird_location) : 0) - 2;
+			widget_text_entry(window_settings,fyp,fxp,1,screen_cols-(2*2),callback_lyrebird_location,WIDGET_INPUT_SINGLE_LINE,&tmp_lyrebird_location,&tmp_lyrebird_location_pos);
+		}
+		else if(item_to_draw == 7)
+		{ // Select Conjure binary location (effective immediately)
+			snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_conjure,text_binary_location);
+			*fyp += 2, *fxp = 2;
+			print_wrapped(window_settings, fyp, fxp, screen_cols-(2*2), label_text, strlen(label_text));
+			*fyp += 1,*fxp = screen_cols - (tmp_conjure_location ? strlen(tmp_conjure_location) : 0) - 2;
+			widget_text_entry(window_settings,fyp,fxp,1,screen_cols-(2*2),callback_conjure_location,WIDGET_INPUT_SINGLE_LINE,&tmp_conjure_location,&tmp_conjure_location_pos);
+		}
+		else if(item_to_draw == 8)
+		{ // Maximum CPU threads for TorX-ID generation
+			*fyp += 2, *fxp = 2;
+			print_wrapped(window_settings, fyp, fxp, screen_cols-(2*2), text_set_cpu, strlen(text_set_cpu));
+			*fyp += 1,*fxp = screen_cols - (tmp_threads_max ? strlen(tmp_threads_max) : 0) - 2;
+			widget_text_entry(window_settings,fyp,fxp,1,screen_cols-(2*2),callback_threads,WIDGET_INPUT_NUMERICAL,&tmp_threads_max,&tmp_threads_max_pos);
+		}
+		else if(item_to_draw == 9)
+		{ // Minimum Suffix Length for TorX-ID generation
+			*fyp += 2, *fxp = 2;
+			print_wrapped(window_settings, fyp, fxp, screen_cols-(2*2), text_set_suffix, strlen(text_set_suffix));
+			*fyp += 1,*fxp = screen_cols - (tmp_suffix_length ? strlen(tmp_suffix_length) : 0) - 2;
+			widget_text_entry(window_settings,fyp,fxp,1,screen_cols-(2*2),callback_suffix,WIDGET_INPUT_NUMERICAL,&tmp_suffix_length,&tmp_suffix_length_pos);
+		}
+		else if(item_to_draw == 10)
+		{ // Single-Use TorX-ID expiration time (days)
+			*fyp += 2, *fxp = 2;
+			print_wrapped(window_settings, fyp, fxp, screen_cols-(2*2), text_set_validity_sing, strlen(text_set_validity_sing));
+			*fyp += 1,*fxp = screen_cols - (tmp_sing_expiration_days ? strlen(tmp_sing_expiration_days) : 0) - 2;
+			widget_text_entry(window_settings,fyp,fxp,1,screen_cols-(2*2),callback_sing_days,WIDGET_INPUT_NUMERICAL,&tmp_sing_expiration_days,&tmp_sing_expiration_days_pos);
+		}
+		else if(item_to_draw == 11)
+		{ // Multiple-Use TorX-ID expiration time (days)
+			*fyp += 2, *fxp = 2;
+			print_wrapped(window_settings, fyp, fxp, screen_cols-(2*2), text_set_validity_mult, strlen(text_set_validity_mult));
+			*fyp += 1,*fxp = screen_cols - (tmp_mult_expiration_days ? strlen(tmp_mult_expiration_days) : 0) - 2;
+			widget_text_entry(window_settings,fyp,fxp,1,screen_cols-(2*2),callback_mult_dats,WIDGET_INPUT_NUMERICAL,&tmp_mult_expiration_days,&tmp_mult_expiration_days_pos);
+		}
+		else if(item_to_draw == 12)
+		{ // Automatically Accept Incoming Mult Requests
+			if(threadsafe_read_uint8(&mutex_global_variable,&auto_accept_mult))
+				selected = text_enable;
+			else
+				selected = text_disable;
+			*fyp += 2, *fxp = 2;
+			print_wrapped(window_settings, fyp, fxp, screen_cols-(2*2), text_set_auto_mult, strlen(text_set_auto_mult));
+			*fyp += 1,*fxp = screen_cols - strlen(selected) - 2;
+			widget_button(window_settings,fyp,fxp,screen_cols-(2*2),callback_auto_mult,selected);
+		}
+		else if(item_to_draw == 13)
+		{ // Tor SOCKS5 Port
+			*fyp += 2, *fxp = 2;
+			print_wrapped(window_settings, fyp, fxp, screen_cols-(2*2), text_set_tor_port_socks, strlen(text_set_tor_port_socks));
+			*fyp += 1,*fxp = screen_cols - (tmp_tor_socks_port ? strlen(tmp_tor_socks_port) : 0) - 2;
+			widget_text_entry(window_settings,fyp,fxp,1,screen_cols-(2*2),callback_socks_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_socks_port,&tmp_tor_socks_port_pos);
+		}
+		else if(item_to_draw == 14)
+		{ // Tor Control Port
+			*fyp += 2, *fxp = 2;
+			print_wrapped(window_settings, fyp, fxp, screen_cols-(2*2), text_set_tor_port_ctrl, strlen(text_set_tor_port_ctrl));
+			*fyp += 1,*fxp = screen_cols - (tmp_tor_ctrl_port ? strlen(tmp_tor_ctrl_port) : 0) - 2;
+			widget_text_entry(window_settings,fyp,fxp,1,screen_cols-(2*2),callback_ctrl_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_ctrl_port,&tmp_tor_ctrl_port_pos);
+		}
+		else if(item_to_draw == 15) // TODO keep the highest number up to date as `max`
+		{ // Tor Control Password
+			*fyp += 2, *fxp = 2;
+			print_wrapped(window_settings, fyp, fxp, screen_cols-(2*2), text_set_tor_password, strlen(text_set_tor_password));
+			*fyp += 1,*fxp = screen_cols - (tmp_control_password_clear ? strlen(tmp_control_password_clear) : 0) - 2;
+			widget_text_entry(window_settings,fyp,fxp,1,screen_cols-(2*2),callback_ctrl_pass,WIDGET_INPUT_SINGLE_LINE,&tmp_control_password_clear,&tmp_control_password_clear_pos);
+		}
+		else
+			return 0; // Printed nothing
+		if(*fyp > screen_rows - 3) // don't modify without extensitve thought
+			return 0; // Printed into border or beyond window size
+	}
+	else
+		return 0; // Printed nothing
+	return 1; // Printed something complete
+}
+
 static void draw_settings(void)
 { // Settings Route TODO be sure all of these things being set can sunsequently be read using ENUM_CUSTOM_SETTING
 	window_prepare(&window_settings,&focus_settings); // XXX Must do first
 
-	const char *selected = "NULL"; // yes initialize as a string
-	size_t fy = 0, fx = 0;
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
-	// Select language
-	if(language[0] == '\0' || !strncmp(language,languages_available_code[0],5))
-		selected = languages_available_name[0];
-	else if(!strncmp(language,languages_available_code[1],5))
-		selected = languages_available_name[1];
-	fy += 2, fx = 2;
-	print_wrapped(window_settings, &fy, &fx, screen_cols-(fx*2), text_set_select_language, strlen(text_set_select_language));
-	fy += 1,fx = screen_cols - strlen(selected) - 2;
-	widget_button(window_settings,&fy,&fx,screen_cols-(2*2),callback_language,selected);
+	size_t fy = 0, fx = 0;
+	size_t iter = settings_scroll_offset;
+	while(scrollable(window_settings,&fy,&fx,iter)) // Prints a "widget" for every iter. Returns 0 when there is no space left, or we run out of widgets to print.
+		iter++; // Draw widgets until there is no space left on the screen
+	if(!focus_settings && settings_scroll_offset) // XXX DO NOT MODIFY
+		settings_scroll_offset--; // XXX DO NOT MODIFY
+	else if(focus_settings == (int)(iter - settings_scroll_offset - 1) && fy > screen_rows - 3)
+	{ // Scroll down
+		settings_scroll_offset++;
+		focus_settings--;
 
-	// Select color scheme
-	if(global_theme == LIGHT_THEME)
-		selected = text_light;
-	else
-		selected = text_dark;
-	fy += 2, fx = 2;
-	print_wrapped(window_settings, &fy, &fx, screen_cols-(fx*2), text_set_select_theme, strlen(text_set_select_theme));
-	fy += 1,fx = screen_cols - strlen(selected) - 2;
-	widget_button(window_settings,&fy,&fx,screen_cols-(2*2),callback_theme,selected);
+	}
 
-	// TorX-ID (<=52 char) or OnionID (56 char with checksum)
-	if(threadsafe_read_uint8(&mutex_global_variable,&shorten_torxids))
-		selected = text_generate_torxid;
-	else
-		selected = text_generate_onionid;
-	fy += 2, fx = 2;
-	print_wrapped(window_settings, &fy, &fx, screen_cols-(2*2), text_set_onionid_or_torxid, strlen(text_set_onionid_or_torxid));
-	fy += 1,fx = screen_cols - strlen(selected) - 2;
-	widget_button(window_settings,&fy,&fx,screen_cols-(2*2),callback_onionid_or_torxid,selected);
+	box(window_settings,0,0); // Draw border again (since we probably ran over it with scrollable)
 
-	// Message Logging (Global Default)
-	if(threadsafe_read_uint8(&mutex_global_variable,&global_log_messages))
-		selected = text_enable;
-	else
-		selected = text_disable;
-	fy += 2, fx = 2;
-	print_wrapped(window_settings, &fy, &fx, screen_cols-(2*2), text_set_global_log, strlen(text_set_global_log));
-	fy += 1,fx = screen_cols - strlen(selected) - 2;
-	widget_button(window_settings,&fy,&fx,screen_cols-(2*2),callback_global_log_messages,selected);
-
-	// Select Tor binary location (effective immediately)
-	char label_text[512]; // size is arbitrary
-	snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_tor,text_binary_location);
-	fy += 2, fx = 2;
-	print_wrapped(window_settings, &fy, &fx, screen_cols-(2*2), label_text, strlen(label_text));
-	fy += 1,fx = screen_cols - (tmp_tor_location ? strlen(tmp_tor_location) : 0) - 2;
-	widget_text_entry(window_settings,&fy,&fx,1,screen_cols-(2*2),callback_tor_location,WIDGET_INPUT_SINGLE_LINE,&tmp_tor_location,&tmp_tor_location_pos);
-
-	// Select Snowflake binary location (effective immediately)
-	snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_snowflake,text_binary_location);
-	fy += 2, fx = 2;
-	print_wrapped(window_settings, &fy, &fx, screen_cols-(2*2), label_text, strlen(label_text));
-	fy += 1,fx = screen_cols - (tmp_snowflake_location ? strlen(tmp_snowflake_location) : 0) - 2;
-	widget_text_entry(window_settings,&fy,&fx,1,screen_cols-(2*2),callback_snowflake_location,WIDGET_INPUT_SINGLE_LINE,&tmp_snowflake_location,&tmp_snowflake_location_pos);
-
-	// Select Lyrebird binary location (effective immediately)
-	snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_lyrebird,text_binary_location);
-	fy += 2, fx = 2;
-	print_wrapped(window_settings, &fy, &fx, screen_cols-(2*2), label_text, strlen(label_text));
-	fy += 1,fx = screen_cols - (tmp_lyrebird_location ? strlen(tmp_lyrebird_location) : 0) - 2;
-	widget_text_entry(window_settings,&fy,&fx,1,screen_cols-(2*2),callback_lyrebird_location,WIDGET_INPUT_SINGLE_LINE,&tmp_lyrebird_location,&tmp_lyrebird_location_pos);
-
-	// Select Conjure binary location (effective immediately)
-	snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_conjure,text_binary_location);
-	fy += 2, fx = 2;
-	print_wrapped(window_settings, &fy, &fx, screen_cols-(2*2), label_text, strlen(label_text));
-	fy += 1,fx = screen_cols - (tmp_conjure_location ? strlen(tmp_conjure_location) : 0) - 2;
-	widget_text_entry(window_settings,&fy,&fx,1,screen_cols-(2*2),callback_conjure_location,WIDGET_INPUT_SINGLE_LINE,&tmp_conjure_location,&tmp_conjure_location_pos);
-
-	// Maximum CPU threads for TorX-ID generation
-	fy += 2, fx = 2;
-	print_wrapped(window_settings, &fy, &fx, screen_cols-(2*2), text_set_cpu, strlen(text_set_cpu));
-	fy += 1,fx = screen_cols - (tmp_threads_max ? strlen(tmp_threads_max) : 0) - 2;
-	widget_text_entry(window_settings,&fy,&fx,1,screen_cols-(2*2),callback_threads,WIDGET_INPUT_NUMERICAL,&tmp_threads_max,&tmp_threads_max_pos);
-
-	// Minimum Suffix Length for TorX-ID generation
-	fy += 2, fx = 2;
-	print_wrapped(window_settings, &fy, &fx, screen_cols-(2*2), text_set_suffix, strlen(text_set_suffix));
-	fy += 1,fx = screen_cols - (tmp_suffix_length ? strlen(tmp_suffix_length) : 0) - 2;
-	widget_text_entry(window_settings,&fy,&fx,1,screen_cols-(2*2),callback_suffix,WIDGET_INPUT_NUMERICAL,&tmp_suffix_length,&tmp_suffix_length_pos);
-
-	// Single-Use TorX-ID expiration time (days)
-	fy += 2, fx = 2;
-	print_wrapped(window_settings, &fy, &fx, screen_cols-(2*2), text_set_validity_sing, strlen(text_set_validity_sing));
-	fy += 1,fx = screen_cols - (tmp_sing_expiration_days ? strlen(tmp_sing_expiration_days) : 0) - 2;
-	widget_text_entry(window_settings,&fy,&fx,1,screen_cols-(2*2),callback_sing_days,WIDGET_INPUT_NUMERICAL,&tmp_sing_expiration_days,&tmp_sing_expiration_days_pos);
-
-	// Multiple-Use TorX-ID expiration time (days)
-	fy += 2, fx = 2;
-	print_wrapped(window_settings, &fy, &fx, screen_cols-(2*2), text_set_validity_mult, strlen(text_set_validity_mult));
-	fy += 1,fx = screen_cols - (tmp_mult_expiration_days ? strlen(tmp_mult_expiration_days) : 0) - 2;
-	widget_text_entry(window_settings,&fy,&fx,1,screen_cols-(2*2),callback_mult_dats,WIDGET_INPUT_NUMERICAL,&tmp_mult_expiration_days,&tmp_mult_expiration_days_pos);
-
-	// Automatically Accept Incoming Mult Requests
-	fy += 2, fx = 2;
-	print_wrapped(window_settings, &fy, &fx, screen_cols-(2*2), text_set_auto_mult, strlen(text_set_auto_mult));
-	fy += 1,fx = screen_cols - (tmp_auto_accept_mult ? strlen(tmp_auto_accept_mult) : 0) - 2;
-	widget_text_entry(window_settings,&fy,&fx,1,screen_cols-(2*2),callback_auto_mult,WIDGET_INPUT_NUMERICAL,&tmp_auto_accept_mult,&tmp_auto_accept_mult_pos);
-
-	// Tor SOCKS5 Port
-	fy += 2, fx = 2;
-	print_wrapped(window_settings, &fy, &fx, screen_cols-(2*2), text_set_tor_port_socks, strlen(text_set_tor_port_socks));
-	fy += 1,fx = screen_cols - (tmp_tor_socks_port ? strlen(tmp_tor_socks_port) : 0) - 2;
-	widget_text_entry(window_settings,&fy,&fx,1,screen_cols-(2*2),callback_socks_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_socks_port,&tmp_tor_socks_port_pos);
-
-	// Tor Control Port
-	fy += 2, fx = 2;
-	print_wrapped(window_settings, &fy, &fx, screen_cols-(2*2), text_set_tor_port_ctrl, strlen(text_set_tor_port_ctrl));
-	fy += 1,fx = screen_cols - (tmp_tor_ctrl_port ? strlen(tmp_tor_ctrl_port) : 0) - 2;
-	widget_text_entry(window_settings,&fy,&fx,1,screen_cols-(2*2),callback_ctrl_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_ctrl_port,&tmp_tor_ctrl_port_pos);
-
-	// Tor Control Password
-	fy += 2, fx = 2;
-	print_wrapped(window_settings, &fy, &fx, screen_cols-(2*2), text_set_tor_password, strlen(text_set_tor_password));
-	fy += 1,fx = screen_cols - (tmp_control_password_clear ? strlen(tmp_control_password_clear) : 0) - 2;
-	widget_text_entry(window_settings,&fy,&fx,1,screen_cols-(2*2),callback_ctrl_pass,WIDGET_INPUT_SINGLE_LINE,&tmp_control_password_clear,&tmp_control_password_clear_pos+1);
-
-	// Enter an externally generated vanity OnionID or TorX-ID (Advanced)
+	// TODO Enter an externally generated vanity OnionID or TorX-ID (Advanced)
 	/*
 	text_set_externally_generated
 				[		]
