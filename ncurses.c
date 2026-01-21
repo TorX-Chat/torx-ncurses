@@ -2021,33 +2021,33 @@ static void draw_change_password(void)
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
 	size_t label_len = strlen(text_old_password);
-	fy += 2, fx = 2; // align_center(label_len); // fy must be += because there might be wrap
+	fy += 2, fx = align_center(label_len); // fy must be += because there might be wrap
 	print_wrapped(win,&fy,&fx,screen_cols-(fx*2),text_old_password,label_len);
 
-	fy += 1, fx = 4; // align_center(password_old ? torx_allocation_len(password_old) - 1 : 0); // fy must be += because there might be wrap
-	widget_text_entry(win,&fy,&fx,screen_rows-fy,screen_cols-(fx*2),callback_change_password_enter,WIDGET_PASSWORD,&password_old,&pw_old_cursor);
+	fy += 1, fx = align_center(password_old ? torx_allocation_len(password_old) - 1 : 0); // fy must be += because there might be wrap
+	widget_text_entry(win,&fy,&fx,screen_rows-fy,screen_cols-(2*2),callback_change_password_enter,WIDGET_PASSWORD,&password_old,&pw_old_cursor);
 
 	label_len = strlen(text_new_password);
-	fy += 2, fx = 2; // align_center(label_len); // fy must be += because there might be wrap
+	fy += 2, fx = align_center(label_len); // fy must be += because there might be wrap
 	print_wrapped(win,&fy,&fx,screen_cols-(fx*2),text_new_password,label_len);
 
-	fy += 1, fx = 4; // align_center(password_new ? torx_allocation_len(password_new) - 1 : 0); // fy must be += because there might be wrap
-	widget_text_entry(win,&fy,&fx,screen_rows-fy,screen_cols-(fx*2),callback_change_password_enter,WIDGET_PASSWORD,&password_new,&pw_new_cursor);
+	fy += 1, fx = align_center(password_new ? torx_allocation_len(password_new) - 1 : 0); // fy must be += because there might be wrap
+	widget_text_entry(win,&fy,&fx,screen_rows-fy,screen_cols-(2*2),callback_change_password_enter,WIDGET_PASSWORD,&password_new,&pw_new_cursor);
 
 	label_len = strlen(text_new_password_again);
-	fy += 2, fx = 2; // align_center(label_len); // fy must be += because there might be wrap
+	fy += 2, fx = align_center(label_len); // fy must be += because there might be wrap
 	print_wrapped(win,&fy,&fx,screen_cols-(fx*2),text_new_password_again,label_len);
 
-	fy += 1, fx = 4; // align_center(password_verify ? torx_allocation_len(password_verify) - 1 : 0); // fy must be += because there might be wrap
-	widget_text_entry(win,&fy,&fx,screen_rows-fy,screen_cols-(fx*2),callback_change_password_enter,WIDGET_PASSWORD,&password_verify,&pw_verify_cursor);
+	fy += 1, fx = align_center(password_verify ? torx_allocation_len(password_verify) - 1 : 0); // fy must be += because there might be wrap
+	widget_text_entry(win,&fy,&fx,screen_rows-fy,screen_cols-(2*2),callback_change_password_enter,WIDGET_PASSWORD,&password_verify,&pw_verify_cursor);
 
 	char label[256];
 	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_change_password);
-	fy += 2,fx = 2; // align_center(label_len);
+	fy += 2,fx = align_center(label_len);
 	widget_button(win,&fy,&fx,label_len,callback_change_password_attempt,label);
 
-	fy += 1,fx = 2; // align_center(4 + strlen(text_show_password)); // fy must be += because there might be wrap
-	widget_checkbox(win,&fy,&fx,screen_cols-(fx*2),callback_pw_show,1,text_show_password,pw_show);
+	fy += 1,fx = align_center(4 + strlen(text_show_password)); // fy must be += because there might be wrap
+	widget_checkbox(win,&fy,&fx,screen_cols-(2*2),callback_pw_show,1,text_show_password,pw_show);
 
 	widget_draw_cursor(win); // XXX Must do last
 }
