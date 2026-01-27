@@ -102,6 +102,10 @@ static inline void initialize_library(void (*callback)(void))
 
 static void signal_resize(int sig);
 static void draw_login(void);
+static void draw_requests(void);
+static void draw_ids(void);
+static void draw_requests_popover(void);
+static void draw_ids_popover(void);
 static void draw_settings(void);
 static void draw_tor_log(void);
 static void draw_torx_log(void);
@@ -116,6 +120,7 @@ static void draw_group_peerlist(void);
 static void draw_contacts(void);
 static void draw_chat(const int n);
 static int await_key_or_signal(WINDOW *win);
+static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_t *scroll_offset);
 void async_notifier(void);
 
 enum {
@@ -142,15 +147,16 @@ static struct widget {
 
 static int *current_focus = NULL; // XXX must be set otherwise we will dereference a NULL very quick! XXX
 // XXX START One required for each route START XXX
-static int focus_login = -1, focus_settings = -1, focus_contacts = -1, focus_chat = -1, focus_tor_log = -1, focus_torx_log = -1, focus_torrc = -1, focus_change_password = -1, focus_generate = -1, focus_global_kill = -1, focus_chat_actions = -1, focus_chat_settings = -1, focus_group_invite = -1, focus_group_peerlist = -1; // must initialize as -1 so that draw_* can set a default
-static WINDOW *window_login = NULL, *window_settings = NULL, *window_contacts = NULL, *window_chat = NULL, *window_tor_log = NULL, *window_torx_log = NULL, *window_torrc = NULL, *window_change_password = NULL, *window_generate = NULL, *window_global_kill = NULL, *window_chat_actions = NULL, *window_chat_settings = NULL, *window_group_invite = NULL, *window_group_peerlist = NULL;
+static int focus_login = -1, focus_settings = -1, focus_requests = -1, focus_ids = -1, focus_popover = -1, focus_contacts = -1, focus_chat = -1, focus_tor_log = -1, focus_torx_log = -1, focus_torrc = -1, focus_change_password = -1, focus_generate = -1, focus_global_kill = -1, focus_chat_actions = -1, focus_chat_settings = -1, focus_group_invite = -1, focus_group_peerlist = -1; // must initialize as -1 so that draw_* can set a default
+static WINDOW *window_login = NULL, *window_settings = NULL, *window_requests = NULL, *window_ids = NULL, *window_requests_popover = NULL, *window_ids_popover = NULL, *window_contacts = NULL, *window_chat = NULL, *window_tor_log = NULL, *window_torx_log = NULL, *window_torrc = NULL, *window_change_password = NULL, *window_generate = NULL, *window_global_kill = NULL, *window_chat_actions = NULL, *window_chat_settings = NULL, *window_group_invite = NULL, *window_group_peerlist = NULL;
 // XXX END One required for each route END XXX
 
 static int global_theme = THEME_DEFAULT;
 static uint8_t highlight_active = 0; // must initialize as 0
 static size_t cursor[2] = {0}; // y,x
 static size_t inner_width;
-static int selected_n = 0; // internal use only
+static int selected_n = 0; // internal use only, contact list
+static int treeview_n = 0; // IDs/Requests pages/popovers
 static int global_n = -1;
 static volatile sig_atomic_t resized = 0;
 static volatile sig_atomic_t resize_seq = 0;
@@ -192,6 +198,19 @@ static char *add_id = NULL;
 static size_t generate_input_cursor = 0;
 static size_t add_identifier_cursor = 0;
 static size_t add_id_cursor = 0;
+
+/* Requests state */
+static bool outgoing_mode = 0; // default to show incoming requests
+static size_t requests_scroll_offset = 0;
+
+/* IDs state */
+static bool single_mode = 0; // default to showing mults
+static size_t ids_scroll_offset = 0;
+
+/* IDs / Requests Popover state */
+static size_t popover_scroll_offset = 0;
+static char *tmp_rename = NULL;
+static size_t tmp_rename_pos = 0;
 
 /* Settings state */
 static size_t settings_scroll_offset = 0;
@@ -242,6 +261,9 @@ static const char *text_password = {0};
 static const char *text_show_password = {0};
 static const char *text_navigation_chat = {0};
 static const char *text_navigation_basic = {0};
+static const char *text_requests = {0};
+static const char *text_ids = {0};
+static const char *text_logs = {0};
 
 static const char *text_title = {0};
 static const char *text_welcome = {0};
@@ -489,6 +511,14 @@ static void redraw(void)
 { // Do not do anything other than calling draw_* here. Do it in individual draw_* functions so that they can be called independently of this function.
 	if(window_login)
 		draw_login();
+	else if(window_requests)
+		draw_requests();
+	else if(window_ids)
+		draw_ids();
+	else if(window_requests_popover)
+		draw_requests_popover();
+	else if(window_ids_popover)
+		draw_ids_popover();
 	else if(window_settings)
 		draw_settings();
 	else if(window_tor_log)
@@ -563,6 +593,8 @@ static void widget_clear(int *new_focus)
 { // Must call first when drawing a new route, and on shutdown
 	#define destroy_window(win) if(win) { delwin(win); win = NULL; }
 	destroy_window(window_contacts)
+	destroy_window(window_ids)
+	destroy_window(window_requests)
 	destroy_window(window_settings)
 	destroy_window(window_tor_log)
 	destroy_window(window_torx_log)
@@ -576,6 +608,8 @@ static void widget_clear(int *new_focus)
 	destroy_window(window_group_peerlist)
 	destroy_window(window_chat)
 	destroy_window(window_login)
+	destroy_window(window_requests_popover)
+	destroy_window(window_ids_popover)
 	if(new_focus)
 	{ // We're preparing to draw a new window
 		getmaxyx_size(stdscr, &screen_rows, &screen_cols); // 2nd
@@ -785,6 +819,66 @@ static inline void append_character_at_cursor(const int w, const int ch)
 	*widget[w].cursor = *widget[w].cursor + 1;
 }
 
+static void go_back(void)
+{ // Go back or exit
+	if(window_login || window_contacts)
+		running = false;
+	else if(window_chat || window_requests || window_ids || window_settings || window_generate || window_tor_log || window_torx_log || window_global_kill)
+	{
+		global_n = -1;
+		if(window_settings)
+		{
+			torx_free((void*)&tmp_snowflake_location);
+			torx_free((void*)&tmp_lyrebird_location);
+			torx_free((void*)&tmp_conjure_location);
+			torx_free((void*)&tmp_tor_location);
+			torx_free((void*)&tmp_threads_max);
+			torx_free((void*)&tmp_suffix_length);
+			torx_free((void*)&tmp_sing_expiration_days);
+			torx_free((void*)&tmp_mult_expiration_days);
+			torx_free((void*)&tmp_auto_accept_mult);
+			torx_free((void*)&tmp_tor_socks_port);
+			torx_free((void*)&tmp_tor_ctrl_port);
+			torx_free((void*)&tmp_control_password_clear);
+		}
+		else if(window_generate)
+		{
+			torx_free((void*)&generate_input);
+			torx_free((void*)&generate_output);
+			torx_free((void*)&add_identifier);
+			torx_free((void*)&add_id);
+		}
+		draw_contacts();
+	}
+	else if(window_chat_actions || window_chat_settings || window_group_invite || window_group_peerlist)
+		draw_chat(global_n);
+	else if(window_torrc || window_change_password)
+	{
+		if(window_torrc)
+			torx_free((void*)&torrc_content_local);
+		else if(window_change_password)
+		{
+			torx_free((void*)&password);
+			torx_free((void*)&password_old);
+			torx_free((void*)&password_new);
+			torx_free((void*)&password_verify);
+		}
+		draw_settings();
+	}
+	else if(window_requests_popover)
+	{
+		torx_free((void*)&tmp_rename);
+		draw_requests();
+	}
+	else if(window_ids_popover)
+	{
+		torx_free((void*)&tmp_rename);
+		draw_ids();
+	}
+	else
+		error_printf(0,"No window to navigate to. Possible coding error.");
+}
+
 static int keypress(const int w,const int ch)
 {
 	if(w < 0 || w >= (int)(torx_allocation_len(widget) / sizeof(struct widget)))
@@ -794,54 +888,7 @@ static int keypress(const int w,const int ch)
 	}
 	const size_t max_height = screen_rows - 3; // TODO this should be specific to each page
 	if(ch == KEY_ESC || ch == KEY_HOME)
-	{ // Go back or exit
-		if(window_login || window_contacts)
-			running = false;
-		else if(window_chat || window_settings || window_generate || window_tor_log || window_torx_log || window_global_kill)
-		{
-			global_n = -1;
-			if(window_settings)
-			{
-				torx_free((void*)&tmp_snowflake_location);
-				torx_free((void*)&tmp_lyrebird_location);
-				torx_free((void*)&tmp_conjure_location);
-				torx_free((void*)&tmp_tor_location);
-				torx_free((void*)&tmp_threads_max);
-				torx_free((void*)&tmp_suffix_length);
-				torx_free((void*)&tmp_sing_expiration_days);
-				torx_free((void*)&tmp_mult_expiration_days);
-				torx_free((void*)&tmp_auto_accept_mult);
-				torx_free((void*)&tmp_tor_socks_port);
-				torx_free((void*)&tmp_tor_ctrl_port);
-				torx_free((void*)&tmp_control_password_clear);
-			}
-			else if(window_generate)
-			{
-				torx_free((void*)&generate_input);
-				torx_free((void*)&generate_output);
-				torx_free((void*)&add_identifier);
-				torx_free((void*)&add_id);
-			}
-			draw_contacts();
-		}
-		else if(window_chat_actions || window_chat_settings || window_group_invite || window_group_peerlist)
-			draw_chat(global_n);
-		else if(window_torrc || window_change_password)
-		{
-			if(window_torrc)
-				torx_free((void*)&torrc_content_local);
-			else if(window_change_password)
-			{
-				torx_free((void*)&password);
-				torx_free((void*)&password_old);
-				torx_free((void*)&password_new);
-				torx_free((void*)&password_verify);
-			}
-			draw_settings();
-		}
-		else
-			error_printf(0,"No window to navigate to. Possible coding error.");
-	}
+		go_back();
 	else if(ch == '\t' || ch == KEY_BTAB)
 	{
 		*current_focus = (*current_focus + 1) % (int)(torx_allocation_len(widget) / sizeof(struct widget));
@@ -1002,6 +1049,7 @@ static WINDOW *window_prepare(WINDOW **win_p,int *new_focus)
 static void draw_login(void)
 { // Password Route
 	WINDOW *win = window_prepare(&window_login,&focus_login); // XXX Must do first
+	widget_next_has_default_focus(); // XXX Set default widget focus
 
 	size_t fy = 0, fx = 2;
 	wattron(win,A_BOLD); // bold on
@@ -1012,7 +1060,6 @@ static void draw_login(void)
 	print_wrapped(win,&fy,&fx,screen_cols-(fx*2),text_password,strlen(text_password));
 
 	fy += 1, fx = 4; // fy must be += because there might be wrap
-	widget_next_has_default_focus(); // XXX Set default widget focus
 	widget_text_entry(win,&fy,&fx,screen_rows-fy,screen_cols-(fx*2),callback_password,WIDGET_PASSWORD,&password,&pw_cursor);
 
 	fy += 2,fx = 4; // fy must be += because there might be wrap
@@ -1037,6 +1084,9 @@ static void ui_initialize_language(void)
 		text_show_password = "Show Password";
 		text_navigation_chat = "Type message (Enter to send at end, Esc/Home: back, PgUp/PgDn: scroll)";
 		text_navigation_basic = "Tab: cycle focus  Up/Down: move focus  Enter: proceed  Esc/Home: quit";
+		text_requests = "Requests";
+		text_ids = "IDs";
+		text_logs = "Logs";
 
 		text_title = "TorX";
 		text_welcome = "Welcome to TorX";
@@ -1223,6 +1273,9 @@ after each comes online and receives the code.";
 		text_show_password = "显示密码";
 		text_navigation_chat = "输入消息（Enter 在末尾发送，Esc/Home：返回，PgUp/PgDn：滚动）";
 		text_navigation_basic = "Tab：循环切换焦点  Up/Down：移动焦点  Enter：继续  Esc/Home：退出";
+		text_requests = "请求";
+		text_ids = "IDs";
+		text_logs = "日志";
 
 		//text_chats = "聊天";
 		//text_add_generate_bottom = "添加 / 生成";
@@ -1725,6 +1778,58 @@ static int callback_ctrl_pass(const int w,const int ch)
 	return 1; // Rebuild
 }
 
+static int callback_rename(const int w,const int ch)
+{
+	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
+	{
+		if(global_n > -1)
+			change_nick(global_n,*widget[w].text);
+		else if(treeview_n > -1)
+			change_nick(treeview_n,*widget[w].text);
+	}
+	else
+		return 0; // Do not rebuild
+	return 1; // Rebuild
+}
+
+static int callback_toggle_block(const int w,const int ch)
+{
+	(void)w;
+	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
+	{
+		if(global_n > -1)
+			block_peer(global_n);
+		else if(treeview_n > -1)
+			block_peer(treeview_n);
+	}
+	else
+		return 0; // Do not rebuild
+	return 1; // Rebuild
+}
+
+static int callback_peer_accept(const int w,const int ch)
+{
+	(void)w;
+	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
+	{
+		peer_accept(treeview_n);
+		go_back();
+	}
+	return 0; // Do not rebuild
+}
+
+static int callback_peer_delete(const int w,const int ch)
+{
+	(void)w;
+	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
+	{
+		const int peer_index = getter_int(treeview_n,INT_MIN,-1,offsetof(struct peer_list,peer_index));
+		takedown_onion(peer_index,1);
+		go_back();
+	}
+	return 0; // Do not rebuild
+}
+
 static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_draw)
 {
 	if(win == window_settings)
@@ -1860,7 +1965,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 			*fyp += 1,*fxp = screen_cols - (tmp_tor_ctrl_port ? strlen(tmp_tor_ctrl_port) : 0) - 2;
 			widget_text_entry(win,fyp,fxp,1,screen_cols-(2*2),callback_ctrl_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_ctrl_port,&tmp_tor_ctrl_port_pos);
 		}
-		else if(item_to_draw == 15) // TODO keep the highest number up to date as `max`
+		else if(item_to_draw == 15)
 		{ // Tor Control Password
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_tor_password, strlen(text_set_tor_password));
@@ -1869,12 +1974,150 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 		}
 		else
 			return 0; // Printed nothing
-		if(*fyp > screen_rows - 2) // XXX DO NOT MODIFY ajosdf02f02f
-			return 0; // Printed into border or beyond window size
+	}
+	else if(win == window_requests_popover || win == window_ids_popover)
+	{ // utilizes treeview_n
+		if(item_to_draw == 0)
+		{ // Rename text_entry
+			*fyp += 2, *fxp = 2;
+			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_identifier, strlen(text_identifier));
+			*fyp += 1,*fxp = screen_cols - (tmp_rename ? strlen(tmp_rename) : 0) - 2;
+			widget_text_entry(win,fyp,fxp,1,screen_cols-(2*2),callback_rename,WIDGET_INPUT_SINGLE_LINE,&tmp_rename,&tmp_rename_pos);
+		}
+		else if(item_to_draw == 1)
+		{
+			if(window_ids_popover)
+			{ // Active checkbox
+				const uint8_t status = getter_uint8(treeview_n,INT_MIN,-1,offsetof(struct peer_list,status));
+				*fyp += 2, *fxp = align_right(strlen(text_active) + 4);
+				widget_checkbox(win,fyp,fxp,screen_cols-(2*2),callback_toggle_block,1,text_active,status == ENUM_STATUS_FRIEND ? 1 : 0);
+			}
+			else if(window_requests_popover && !outgoing_mode)
+			{ // Accept Incoming request button
+				*fyp += 1, *fxp = screen_cols - strlen(text_accept) - 2;
+				widget_button(win,fyp,fxp,screen_cols-(2*2),callback_peer_accept,text_accept);
+			}
+		}
+		else if(item_to_draw == 2)
+		{
+			char label[256];
+			const size_t label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",window_requests_popover && !outgoing_mode ? text_reject : text_delete);
+			*fyp += 2, *fxp = align_right(label_len);
+			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_peer_delete,label);
+		}
+		else
+			return 0; // Printed nothing
 	}
 	else
 		return 0; // Printed nothing
+	if(*fyp > screen_rows - 2) // XXX DO NOT MODIFY ajosdf02f02f
+		return 0; // Printed into border or beyond window size
 	return 1; // Printed something complete
+}
+
+static void draw_requests_popover(void)
+{ // Requests Route Popover, utilizes treeview_n
+	WINDOW *win = window_prepare(&window_requests_popover,&focus_popover); // XXX Must do first
+	widget_next_has_default_focus(); // XXX Set default widget focus
+
+	size_t fy = 0,fx = 2;
+	wattron(win,A_BOLD); // bold on
+	mvwprintw_size(win,fy,fx,"%s",text_edit); // do not wrap
+	wattroff(win,A_BOLD); // bold off
+
+	draw_scrollable(win,&fy,&fx,&focus_popover,&popover_scroll_offset);
+
+	widget_draw_cursor(win); // XXX Must do last
+}
+
+static void draw_ids_popover(void)
+{ // ID Route Popover, utilizes treeview_n
+	WINDOW *win = window_prepare(&window_ids_popover,&focus_popover); // XXX Must do first
+	widget_next_has_default_focus(); // XXX Set default widget focus
+
+	size_t fy = 0,fx = 2;
+	wattron(win,A_BOLD); // bold on
+	mvwprintw_size(win,fy,fx,"%s",text_edit); // do not wrap
+	wattroff(win,A_BOLD); // bold off
+
+	draw_scrollable(win,&fy,&fx,&focus_popover,&popover_scroll_offset);
+
+	widget_draw_cursor(win); // XXX Must do last
+}
+
+static int callback_popover(const int w,const int ch)
+{ // utilizes treeview_n
+	(void)w;
+	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
+	{
+		focus_popover = -1;
+		tmp_rename = getter_string(treeview_n,INT_MIN,-1,offsetof(struct peer_list,peernick));
+		tmp_rename_pos = tmp_rename ? torx_allocation_len(tmp_rename) - 1 : 0;
+		if(window_ids)
+			draw_ids_popover();
+		else if(window_requests)
+			draw_requests_popover();
+	}
+	return 0; // Do not rebuild
+}
+
+static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_t *scroll_offset)
+{
+	if(!win || !fyp || !fxp || !focus || !scroll_offset)
+		return;
+	const size_t widgets_existing_before_scrollable = torx_allocation_len(widget) / sizeof(struct widget);
+	size_t iter = *scroll_offset;
+	if(win == window_ids || win == window_requests)
+	{
+		int len;
+		int *array;
+		if(win == window_ids)
+			array = refined_list(&len,single_mode ? ENUM_OWNER_SING : ENUM_OWNER_MULT,ENUM_STATUS_PENDING,NULL);
+		else // if(win == window_requests)
+			array = refined_list(&len,outgoing_mode ? ENUM_OWNER_PEER : ENUM_OWNER_CTRL,ENUM_STATUS_PENDING,NULL);
+		const uint8_t shorten_torxids_local = threadsafe_read_uint8(&mutex_global_variable,&shorten_torxids);
+		while((int)iter < len)
+		{
+			const int n = array[iter++];
+			char label[screen_cols - (2*2) + 1];
+			char onion[56+1]; // zero'd
+			if(shorten_torxids_local)
+				getter_array(&onion,52+1,n,INT_MIN,-1,offsetof(struct peer_list,torxid));
+			else
+				getter_array(&onion,sizeof(onion),n,INT_MIN,-1,offsetof(struct peer_list,onion));
+			char *peernick = getter_string(n,INT_MIN,-1,offsetof(struct peer_list,peernick));
+			if(win == window_ids)
+			{
+				const uint8_t status = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,status));
+				snprintf(label,sizeof(label),"%s %s %s",status == ENUM_STATUS_FRIEND ? "[x]" : "[ ]",peernick,onion);
+			}
+			else // if(win == window_requests)
+				snprintf(label,sizeof(label),"%s %s",peernick,onion);
+			*fyp += 1,*fxp = 2;
+			if(widget_button(win,fyp,fxp,screen_cols-(2*2)+1,callback_popover,label) == *focus) // the +1 is to prevent wrapping
+				treeview_n = n;
+			sodium_memzero(onion,sizeof(onion));
+			sodium_memzero(label,sizeof(label));
+			torx_free((void*)&peernick);
+		}
+	}
+	else
+		while(scrollable(win,fyp,fxp,iter)) // Prints a "widget" for every iter. Returns 0 when there is no space left, or we run out of widgets to print.
+			iter++; // Draw widgets until there is no space left on the screen
+	iter--; // NECESSARY.
+	if(*focus == (int)widgets_existing_before_scrollable && *scroll_offset) // XXX DO NOT MODIFY
+	{ // Scrolling up
+		*scroll_offset = *scroll_offset - 1; // XXX DO NOT MODIFY
+		*focus = *focus + 1; // XXX DO NOT MODIFY
+	}
+	else if(*focus == (int)(iter - *scroll_offset + widgets_existing_before_scrollable) && *fyp > screen_rows - 2) // XXX DO NOT MODIFY ajosdf02f02f
+	{ // Scroll down
+		*scroll_offset = *scroll_offset + 1; // XXX DO NOT MODIFY
+		*focus = *focus - 1; // XXX DO NOT MODIFY
+	}
+	if(*fyp > screen_rows - 2) // Draw border again (if we ran over it with scrollable)
+		for(size_t x = 1; x < screen_cols - 1; x++)
+			mvwaddch(win, (int)screen_rows-1, (int)x, ACS_HLINE);
 }
 
 static int callback_torrc(const int w,const int ch)
@@ -1925,24 +2168,7 @@ static void draw_settings(void)
 
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
-	const size_t widgets_existing_before_scrollable = torx_allocation_len(widget) / sizeof(struct widget);
-	size_t iter = settings_scroll_offset;
-	while(scrollable(win,&fy,&fx,iter)) // Prints a "widget" for every iter. Returns 0 when there is no space left, or we run out of widgets to print.
-		iter++; // Draw widgets until there is no space left on the screen
-	iter--; // NECESSARY.
-	if(focus_settings == (int)widgets_existing_before_scrollable && settings_scroll_offset) // XXX DO NOT MODIFY
-	{ // Scrolling up
-		settings_scroll_offset--; // XXX DO NOT MODIFY
-		focus_settings++; // XXX DO NOT MODIFY
-	}
-	else if(focus_settings == (int)(iter - settings_scroll_offset + widgets_existing_before_scrollable) && fy > screen_rows - 2) // XXX DO NOT MODIFY ajosdf02f02f
-	{ // Scroll down
-		settings_scroll_offset++; // XXX DO NOT MODIFY
-		focus_settings--; // XXX DO NOT MODIFY
-	}
-	if(fy > screen_rows - 2) // Draw border again (if we ran over it with scrollable)
-		for(size_t x = 1; x < screen_cols - 1; x++)
-			mvwaddch(win, (int)screen_rows-1, (int)x, ACS_HLINE);
+	draw_scrollable(win,&fy,&fx,&focus_settings,&settings_scroll_offset);
 
 	// TODO Enter an externally generated vanity OnionID or TorX-ID (Advanced)
 	/*
@@ -1964,7 +2190,7 @@ static void draw_settings(void)
 static void draw_tor_log(void)
 { // Tor Log Route
 	WINDOW *win = window_prepare(&window_tor_log,&focus_tor_log); // XXX Must do first
-
+	widget_next_has_default_focus(); // XXX Set default widget focus
 
 
 
@@ -1975,7 +2201,7 @@ static void draw_tor_log(void)
 static void draw_torx_log(void)
 { // TorX Log Route
 	WINDOW *win = window_prepare(&window_torx_log,&focus_torx_log); // XXX Must do first
-
+	widget_next_has_default_focus(); // XXX Set default widget focus
 
 
 
@@ -2020,6 +2246,7 @@ static void draw_torrc(void)
 	widget_next_has_default_focus(); // XXX Set default widget focus
 	widget_text_entry(win,&fy,&fx,screen_rows - 2,inner_width,NULL,WIDGET_INPUT_MULTI_LINE,&torrc_content_local,&torrc_pos);
 
+	sodium_memzero(label,sizeof(label));
 	widget_draw_cursor(win); // XXX Must do last
 }
 
@@ -2034,14 +2261,13 @@ static int callback_change_password_attempt(const int w,const int ch)
 static void draw_change_password(void)
 { // Change Password Route
 	WINDOW *win = window_prepare(&window_change_password,&focus_change_password); // XXX Must do first
+	widget_next_has_default_focus(); // XXX Set default widget focus
 
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
 	mvwprintw_size(win,fy,fx,"%s",text_change_password); // do not wrap
 	wattroff(win,A_BOLD); // bold off
-
-	widget_next_has_default_focus(); // XXX Set default widget focus
 
 	size_t label_len = strlen(text_old_password);
 	fy += 2, fx = align_center(label_len); // fy must be += because there might be wrap
@@ -2072,6 +2298,7 @@ static void draw_change_password(void)
 	fy += 1,fx = align_center(4 + strlen(text_show_password)); // fy must be += because there might be wrap
 	widget_checkbox(win,&fy,&fx,screen_cols-(2*2),callback_pw_show,1,text_show_password,pw_show);
 
+	sodium_memzero(label,sizeof(label));
 	widget_draw_cursor(win); // XXX Must do last
 }
 
@@ -2169,14 +2396,13 @@ static int callback_generate_two(const int w,const int ch)
 static void draw_generate(void)
 { // Generate Route
 	WINDOW *win = window_prepare(&window_generate,&focus_generate); // XXX Must do first
+	widget_next_has_default_focus(); // XXX Set default widget focus
 
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
 	mvwprintw_size(win,fy,fx,"%s",group_mode ? text_group : text_add_generate); // do not wrap
 	wattroff(win,A_BOLD); // bold off
-
-	widget_next_has_default_focus(); // XXX Set default widget focus
 
 	char label[256];
 	size_t label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",group_mode ? text_peer : text_group);
@@ -2235,13 +2461,14 @@ static void draw_generate(void)
 		print_wrapped(win,&fy,&fx,screen_cols-(2*2),generate_output,label_len);
 	}
 
+	sodium_memzero(label,sizeof(label));
 	widget_draw_cursor(win); // XXX Must do last
 }
 
 static void draw_global_kill(void)
 { // Global Kill Route
 	WINDOW *win = window_prepare(&window_global_kill,&focus_global_kill); // XXX Must do first
-
+	widget_next_has_default_focus(); // XXX Set default widget focus
 
 
 
@@ -2252,7 +2479,7 @@ static void draw_global_kill(void)
 static void draw_chat_actions(void)
 { // Chat Actions Route (NOTE: global_n is still set)
 	WINDOW *win = window_prepare(&window_chat_actions,&focus_chat_actions); // XXX Must do first
-
+	widget_next_has_default_focus(); // XXX Set default widget focus
 
 
 
@@ -2263,7 +2490,7 @@ static void draw_chat_actions(void)
 static void draw_chat_settings(void)
 { // Chat Settings Route (NOTE: global_n is still set) TODO be sure all of these things being set can sunsequently be read using ENUM_CUSTOM_SETTING
 	WINDOW *win = window_prepare(&window_chat_settings,&focus_chat_settings); // XXX Must do first
-
+	widget_next_has_default_focus(); // XXX Set default widget focus
 
 
 
@@ -2274,7 +2501,7 @@ static void draw_chat_settings(void)
 static void draw_group_invite(void)
 { // Group Invite Route (NOTE: global_n is still set)
 	WINDOW *win = window_prepare(&window_group_invite,&focus_group_invite); // XXX Must do first
-
+	widget_next_has_default_focus(); // XXX Set default widget focus
 
 
 
@@ -2285,7 +2512,7 @@ static void draw_group_invite(void)
 static void draw_group_peerlist(void)
 { // Group Peerlist Route (NOTE: global_n is still set)
 	WINDOW *win = window_prepare(&window_group_peerlist,&focus_group_peerlist); // XXX Must do first
-
+	widget_next_has_default_focus(); // XXX Set default widget focus
 
 
 
@@ -2352,6 +2579,78 @@ static int callback_settings(const int w,const int ch)
 		draw_settings();
 	}
 	return 0; // Do not rebuild
+}
+
+static int callback_toggle_requests(const int w,const int ch)
+{
+	(void)w;
+	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
+	{
+		outgoing_mode = !outgoing_mode;
+		return 1; // Rebuild
+	}
+	return 0; // Do not rebuild
+}
+
+static void draw_requests(void)
+{ // Requests Route
+	WINDOW *win = window_prepare(&window_requests,&focus_requests); // XXX Must do first
+	widget_next_has_default_focus(); // XXX Set default widget focus
+
+	size_t fy = 0,fx = 2;
+	wattron(win,A_BOLD); // bold on
+	mvwprintw_size(win,fy,fx,"%s",outgoing_mode ? text_outgoing : text_incoming); // do not wrap
+	wattroff(win,A_BOLD); // bold off
+
+	char label[256];
+	size_t label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",outgoing_mode ? text_incoming : text_outgoing);
+	fx = align_right(label_len);
+	widget_button(win,&fy,&fx,label_len,callback_toggle_requests,label);
+
+	label_len = (size_t)snprintf(label,sizeof(label),"%s %s",text_identifier, threadsafe_read_uint8(&mutex_global_variable,&shorten_torxids) ? text_torxid : text_onionid);
+	fx = 2;
+	print_wrapped(win,&fy,&fx,screen_cols-(2*2),label,label_len);
+
+	draw_scrollable(win,&fy,&fx,&focus_requests,&requests_scroll_offset);
+
+	sodium_memzero(label,sizeof(label));
+	widget_draw_cursor(win); // XXX Must do last
+}
+
+static int callback_toggle_ids(const int w,const int ch)
+{
+	(void)w;
+	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
+	{
+		single_mode = !single_mode;
+		return 1; // Rebuild
+	}
+	return 0; // Do not rebuild
+}
+
+static void draw_ids(void)
+{ // IDs Route
+	WINDOW *win = window_prepare(&window_ids,&focus_ids); // XXX Must do first
+	widget_next_has_default_focus(); // XXX Set default widget focus
+
+	size_t fy = 0,fx = 2;
+	wattron(win,A_BOLD); // bold on
+	mvwprintw_size(win,fy,fx,"%s",single_mode ? text_active_sing : text_active_mult); // do not wrap
+	wattroff(win,A_BOLD); // bold off
+
+	char label[256];
+	size_t label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",single_mode ? text_active_mult : text_active_sing);
+	fx = align_right(label_len);
+	widget_button(win,&fy,&fx,label_len,callback_toggle_ids,label);
+
+	label_len = (size_t)snprintf(label,sizeof(label),"%s %s %s",text_active,text_identifier, threadsafe_read_uint8(&mutex_global_variable,&shorten_torxids) ? text_torxid : text_onionid);
+	fx = 2;
+	print_wrapped(win,&fy,&fx,screen_cols-(2*2),label,label_len);
+
+	draw_scrollable(win,&fy,&fx,&focus_ids,&ids_scroll_offset);
+
+	sodium_memzero(label,sizeof(label));
+	widget_draw_cursor(win); // XXX Must do last
 }
 
 static int callback_tor_log(const int w,const int ch)
@@ -2456,9 +2755,32 @@ static int callback_peer(const int w,const int ch)
 	return 0; // Do not rebuild
 }
 
+static int callback_requests(const int w,const int ch)
+{
+	(void)w;
+	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
+	{
+		focus_requests = -1; // unset, important
+		draw_requests();
+	}
+	return 0; // Do not rebuild
+}
+
+static int callback_ids(const int w,const int ch)
+{
+	(void)w;
+	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
+	{
+		focus_ids = -1; // unset, important
+		draw_ids();
+	}
+	return 0; // Do not rebuild
+}
+
 static void draw_contacts(void)
 { // Contact List Route
 	WINDOW *win = window_prepare(&window_contacts,&focus_contacts); // XXX Must do first
+	widget_next_has_default_focus(); // XXX Set default widget focus
 
 	wattron(win,A_BOLD); // bold on
 	if(groups_mode)
@@ -2470,44 +2792,31 @@ static void draw_contacts(void)
 	char label[256];
 	size_t label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",groups_mode ? text_peer : text_group);
 	size_t fy = 0,fx = align_right(label_len);
-	widget_next_has_default_focus(); // XXX Set default widget focus
 	widget_button(win,&fy,&fx,label_len,callback_contacts_groups,label);
 
 	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_add_or_generate);
 	fx = align_right(label_len);
 	widget_button(win,&fy,&fx,label_len,callback_generate,label);
 
-	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_incoming);
+	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_requests);
 	fx = align_right(label_len);
-	widget_button(win,&fy,&fx,label_len,NULL,label); // TODO
+	widget_button(win,&fy,&fx,label_len,callback_requests,label);
 
-	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_outgoing);
+	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_ids);
 	fx = align_right(label_len);
-	widget_button(win,&fy,&fx,label_len,NULL,label); // TODO
+	widget_button(win,&fy,&fx,label_len,callback_ids,label);
 
-	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_active_sing);
+	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_logs);
 	fx = align_right(label_len);
-	widget_button(win,&fy,&fx,label_len,NULL,label); // TODO
-
-	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_active_mult);
-	fx = align_right(label_len);
-	widget_button(win,&fy,&fx,label_len,NULL,label); // TODO
+	widget_button(win,&fy,&fx,label_len,NULL,label);
 
 	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_settings);
 	fx = align_right(label_len);
 	widget_button(win,&fy,&fx,label_len,callback_settings,label);
 
-	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_tor_log);
-	fx = align_right(label_len);
-	widget_button(win,&fy,&fx,label_len,NULL,label); // TODO
-
-	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_torx_log);
-	fx = align_right(label_len);
-	widget_button(win,&fy,&fx,label_len,NULL,label); // TODO
-
 	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_global_kill);
 	fx = align_right(label_len);
-	widget_button(win,&fy,&fx,label_len,NULL,label); // TODO
+	widget_button(win,&fy,&fx,label_len,NULL,label);
 
 	int len = 0;
 	int *array;
@@ -2540,7 +2849,6 @@ static void draw_contacts(void)
 				selected_n = array[pos];
 			if(sendfd_connected || recvfd_connected)
 				wattroff(win,A_BOLD); // bold off
-			sodium_memzero(label,sizeof(label));
 			torx_free((void*)&peernick);
 		}
 		torx_free((void*)&array);
@@ -2549,6 +2857,7 @@ static void draw_contacts(void)
 	fy = screen_rows-2, fx = 2;
 	print_wrapped(win, &fy, &fx, screen_cols-(fx*2), text_navigation_basic, strlen(text_navigation_basic));
 
+	sodium_memzero(label,sizeof(label));
 	widget_draw_cursor(win); // XXX Must do last
 }
 
@@ -2792,6 +3101,7 @@ static void draw_chat(const int n)
 	widget_next_has_default_focus(); // XXX Set default widget focus
 	widget_text_entry(win,&fy,&fx,screen_rows - mid - 2,inner_width,callback_message_input,WIDGET_INPUT_MULTI_LINE,&t_peer[n].unsent,&t_peer[n].unsent_pos);
 
+	sodium_memzero(label,sizeof(label));
 	widget_draw_cursor(win); // XXX Must do last
 }
 
@@ -3073,6 +3383,7 @@ static inline void option_handler(int argc, char **argv)
 			char array[2048]; // arbitrary size
 			snprintf(array,sizeof(array),"%sTorX Library Version: %u.%u.%u.%u\n",CLIENT_VERSION,torx_library_version[0],torx_library_version[1],torx_library_version[2],torx_library_version[3]);
 			printf("%s",array);
+			sodium_memzero(array,sizeof(array));
 			exit(0);
 		}
 		else if(!strncmp(argv[i],"-n",len) || !strncmp(argv[i],"--no-password",len))
