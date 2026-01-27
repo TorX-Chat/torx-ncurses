@@ -118,7 +118,7 @@ static void draw_chat_settings(void);
 static void draw_group_invite(void);
 static void draw_group_peerlist(void);
 static void draw_contacts(void);
-static void draw_chat(const int n);
+static void draw_chat(void);
 static int await_key_or_signal(WINDOW *win);
 static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_t *scroll_offset);
 void async_notifier(void);
@@ -145,11 +145,14 @@ static struct widget {
 	size_t *cursor;
 } * widget = {0}; // REMEMBER to free this list whenever changing a page. Remember to initialize new widgets with zero_w
 
+static WINDOW **window_current = NULL;
 static int *current_focus = NULL; // XXX must be set otherwise we will dereference a NULL very quick! XXX
 // XXX START One required for each route START XXX
 static int focus_login = -1, focus_settings = -1, focus_requests = -1, focus_ids = -1, focus_popover = -1, focus_contacts = -1, focus_chat = -1, focus_tor_log = -1, focus_torx_log = -1, focus_torrc = -1, focus_change_password = -1, focus_generate = -1, focus_global_kill = -1, focus_chat_actions = -1, focus_chat_settings = -1, focus_group_invite = -1, focus_group_peerlist = -1; // must initialize as -1 so that draw_* can set a default
 static WINDOW *window_login = NULL, *window_settings = NULL, *window_requests = NULL, *window_ids = NULL, *window_requests_popover = NULL, *window_ids_popover = NULL, *window_contacts = NULL, *window_chat = NULL, *window_tor_log = NULL, *window_torx_log = NULL, *window_torrc = NULL, *window_change_password = NULL, *window_generate = NULL, *window_global_kill = NULL, *window_chat_actions = NULL, *window_chat_settings = NULL, *window_group_invite = NULL, *window_group_peerlist = NULL;
 // XXX END One required for each route END XXX
+
+static void (*redraw)(void) = NULL;
 
 static int global_theme = THEME_DEFAULT;
 static uint8_t highlight_active = 0; // must initialize as 0
@@ -507,48 +510,6 @@ static inline void getmaxyx_size(WINDOW *win,size_t *vertical,size_t *horizontal
 		*horizontal = (size_t)x;
 }
 
-static void redraw(void)
-{ // Do not do anything other than calling draw_* here. Do it in individual draw_* functions so that they can be called independently of this function.
-	if(window_login)
-		draw_login();
-	else if(window_requests)
-		draw_requests();
-	else if(window_ids)
-		draw_ids();
-	else if(window_requests_popover)
-		draw_requests_popover();
-	else if(window_ids_popover)
-		draw_ids_popover();
-	else if(window_settings)
-		draw_settings();
-	else if(window_tor_log)
-		draw_tor_log();
-	else if(window_torx_log)
-		draw_torx_log();
-	else if(window_torrc)
-		draw_torrc();
-	else if(window_change_password)
-		draw_change_password();
-	else if(window_generate)
-		draw_generate();
-	else if(window_global_kill)
-		draw_global_kill();
-	else if(window_chat_actions)
-		draw_chat_actions();
-	else if(window_chat_settings)
-		draw_chat_settings();
-	else if(window_group_invite)
-		draw_group_invite();
-	else if(window_group_peerlist)
-		draw_group_peerlist();
-	else if(window_contacts)
-		draw_contacts();
-	else if(window_chat)
-		draw_chat(global_n);
-	else
-		error_simple(0,"Failing to redraw unknown window");
-}
-
 static void widget_set_cursor(const size_t y,const size_t x)
 { // Internal function only. All text widgets should call this if they need to show a cursor.
 	cursor[0] = y;
@@ -591,25 +552,11 @@ static int widget_new(const int type,const size_t max_width)
 
 static void widget_clear(int *new_focus)
 { // Must call first when drawing a new route, and on shutdown
-	#define destroy_window(win) if(win) { delwin(win); win = NULL; }
-	destroy_window(window_contacts)
-	destroy_window(window_ids)
-	destroy_window(window_requests)
-	destroy_window(window_settings)
-	destroy_window(window_tor_log)
-	destroy_window(window_torx_log)
-	destroy_window(window_torrc)
-	destroy_window(window_change_password)
-	destroy_window(window_generate)
-	destroy_window(window_global_kill)
-	destroy_window(window_chat_actions)
-	destroy_window(window_chat_settings)
-	destroy_window(window_group_invite)
-	destroy_window(window_group_peerlist)
-	destroy_window(window_chat)
-	destroy_window(window_login)
-	destroy_window(window_requests_popover)
-	destroy_window(window_ids_popover)
+	if(window_current && *window_current)
+	{
+		delwin(*window_current);
+		*window_current = NULL;
+	}
 	if(new_focus)
 	{ // We're preparing to draw a new window
 		getmaxyx_size(stdscr, &screen_rows, &screen_cols); // 2nd
@@ -820,13 +767,14 @@ static inline void append_character_at_cursor(const int w, const int ch)
 }
 
 static void go_back(void)
-{ // Go back or exit
+{ // Go back or exit, after cleaning up any heap allocs
 	if(window_login || window_contacts)
 		running = false;
 	else if(window_chat || window_requests || window_ids || window_settings || window_generate || window_tor_log || window_torx_log || window_global_kill)
 	{
-		global_n = -1;
-		if(window_settings)
+		if(window_chat)
+			global_n = -1;
+		else if(window_settings)
 		{
 			torx_free((void*)&tmp_snowflake_location);
 			torx_free((void*)&tmp_lyrebird_location);
@@ -851,7 +799,7 @@ static void go_back(void)
 		draw_contacts();
 	}
 	else if(window_chat_actions || window_chat_settings || window_group_invite || window_group_peerlist)
-		draw_chat(global_n);
+		draw_chat();
 	else if(window_torrc || window_change_password)
 	{
 		if(window_torrc)
@@ -1030,9 +978,11 @@ static int callback_pw_show(const int w,const int ch)
 	return 1; // Rebuild
 }
 
-static WINDOW *window_prepare(WINDOW **win_p,int *new_focus)
+static WINDOW *window_prepare(void (*caller)(void),WINDOW **win_p,int *new_focus)
 {
 	widget_clear(new_focus); // XXX Must do first
+	window_current = win_p;
+	redraw = caller;
 	*win_p = newwin_size(screen_rows, screen_cols, 0, 0);
 	if(global_theme == LIGHT_THEME)
 	{
@@ -1048,7 +998,7 @@ static WINDOW *window_prepare(WINDOW **win_p,int *new_focus)
 
 static void draw_login(void)
 { // Password Route
-	WINDOW *win = window_prepare(&window_login,&focus_login); // XXX Must do first
+	WINDOW *win = window_prepare(&draw_login,&window_login,&focus_login); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
 	size_t fy = 0, fx = 2;
@@ -2017,7 +1967,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 
 static void draw_requests_popover(void)
 { // Requests Route Popover, utilizes treeview_n
-	WINDOW *win = window_prepare(&window_requests_popover,&focus_popover); // XXX Must do first
+	WINDOW *win = window_prepare(&draw_requests_popover,&window_requests_popover,&focus_popover); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
 	size_t fy = 0,fx = 2;
@@ -2032,7 +1982,7 @@ static void draw_requests_popover(void)
 
 static void draw_ids_popover(void)
 { // ID Route Popover, utilizes treeview_n
-	WINDOW *win = window_prepare(&window_ids_popover,&focus_popover); // XXX Must do first
+	WINDOW *win = window_prepare(&draw_ids_popover,&window_ids_popover,&focus_popover); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
 	size_t fy = 0,fx = 2;
@@ -2149,7 +2099,7 @@ static int callback_change_password(const int w,const int ch)
 
 static void draw_settings(void)
 { // Settings Route TODO be sure all of these things being set can sunsequently be read using ENUM_CUSTOM_SETTING
-	WINDOW *win = window_prepare(&window_settings,&focus_settings); // XXX Must do first
+	WINDOW *win = window_prepare(&draw_settings,&window_settings,&focus_settings); // XXX Must do first
 
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
@@ -2189,7 +2139,7 @@ static void draw_settings(void)
 
 static void draw_tor_log(void)
 { // Tor Log Route
-	WINDOW *win = window_prepare(&window_tor_log,&focus_tor_log); // XXX Must do first
+	WINDOW *win = window_prepare(&draw_tor_log,&window_tor_log,&focus_tor_log); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
 
@@ -2200,7 +2150,7 @@ static void draw_tor_log(void)
 
 static void draw_torx_log(void)
 { // TorX Log Route
-	WINDOW *win = window_prepare(&window_torx_log,&focus_torx_log); // XXX Must do first
+	WINDOW *win = window_prepare(&draw_torx_log,&window_torx_log,&focus_torx_log); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
 
@@ -2228,7 +2178,7 @@ static int callback_save_torrc(const int w,const int ch)
 
 static void draw_torrc(void)
 { // Torrc Route
-	WINDOW *win = window_prepare(&window_torrc,&focus_torrc); // XXX Must do first
+	WINDOW *win = window_prepare(&draw_torrc,&window_torrc,&focus_torrc); // XXX Must do first
 
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
@@ -2260,7 +2210,7 @@ static int callback_change_password_attempt(const int w,const int ch)
 
 static void draw_change_password(void)
 { // Change Password Route
-	WINDOW *win = window_prepare(&window_change_password,&focus_change_password); // XXX Must do first
+	WINDOW *win = window_prepare(&draw_change_password,&window_change_password,&focus_change_password); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
 	size_t fy = 0,fx = 2;
@@ -2395,7 +2345,7 @@ static int callback_generate_two(const int w,const int ch)
 
 static void draw_generate(void)
 { // Generate Route
-	WINDOW *win = window_prepare(&window_generate,&focus_generate); // XXX Must do first
+	WINDOW *win = window_prepare(&draw_generate,&window_generate,&focus_generate); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
 	size_t fy = 0,fx = 2;
@@ -2467,7 +2417,7 @@ static void draw_generate(void)
 
 static void draw_global_kill(void)
 { // Global Kill Route
-	WINDOW *win = window_prepare(&window_global_kill,&focus_global_kill); // XXX Must do first
+	WINDOW *win = window_prepare(&draw_global_kill,&window_global_kill,&focus_global_kill); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
 
@@ -2478,7 +2428,7 @@ static void draw_global_kill(void)
 
 static void draw_chat_actions(void)
 { // Chat Actions Route (NOTE: global_n is still set)
-	WINDOW *win = window_prepare(&window_chat_actions,&focus_chat_actions); // XXX Must do first
+	WINDOW *win = window_prepare(&draw_chat_actions,&window_chat_actions,&focus_chat_actions); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
 
@@ -2489,7 +2439,7 @@ static void draw_chat_actions(void)
 
 static void draw_chat_settings(void)
 { // Chat Settings Route (NOTE: global_n is still set) TODO be sure all of these things being set can sunsequently be read using ENUM_CUSTOM_SETTING
-	WINDOW *win = window_prepare(&window_chat_settings,&focus_chat_settings); // XXX Must do first
+	WINDOW *win = window_prepare(&draw_chat_settings,&window_chat_settings,&focus_chat_settings); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
 
@@ -2500,7 +2450,7 @@ static void draw_chat_settings(void)
 
 static void draw_group_invite(void)
 { // Group Invite Route (NOTE: global_n is still set)
-	WINDOW *win = window_prepare(&window_group_invite,&focus_group_invite); // XXX Must do first
+	WINDOW *win = window_prepare(&draw_group_invite,&window_group_invite,&focus_group_invite); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
 
@@ -2511,7 +2461,7 @@ static void draw_group_invite(void)
 
 static void draw_group_peerlist(void)
 { // Group Peerlist Route (NOTE: global_n is still set)
-	WINDOW *win = window_prepare(&window_group_peerlist,&focus_group_peerlist); // XXX Must do first
+	WINDOW *win = window_prepare(&draw_group_peerlist,&window_group_peerlist,&focus_group_peerlist); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
 
@@ -2594,7 +2544,7 @@ static int callback_toggle_requests(const int w,const int ch)
 
 static void draw_requests(void)
 { // Requests Route
-	WINDOW *win = window_prepare(&window_requests,&focus_requests); // XXX Must do first
+	WINDOW *win = window_prepare(&draw_requests,&window_requests,&focus_requests); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
 	size_t fy = 0,fx = 2;
@@ -2630,7 +2580,7 @@ static int callback_toggle_ids(const int w,const int ch)
 
 static void draw_ids(void)
 { // IDs Route
-	WINDOW *win = window_prepare(&window_ids,&focus_ids); // XXX Must do first
+	WINDOW *win = window_prepare(&draw_ids,&window_ids,&focus_ids); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
 	size_t fy = 0,fx = 2;
@@ -2750,7 +2700,7 @@ static int callback_peer(const int w,const int ch)
 		t_peer[global_n].unread = 0;
 		chat_scroll_lines = 0;
 		focus_chat = -1; // unset, important
-		draw_chat(global_n);
+		draw_chat();
 	}
 	return 0; // Do not rebuild
 }
@@ -2779,7 +2729,7 @@ static int callback_ids(const int w,const int ch)
 
 static void draw_contacts(void)
 { // Contact List Route
-	WINDOW *win = window_prepare(&window_contacts,&focus_contacts); // XXX Must do first
+	WINDOW *win = window_prepare(&draw_contacts,&window_contacts,&focus_contacts); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
 	wattron(win,A_BOLD); // bold on
@@ -2979,14 +2929,15 @@ static int callback_message_input(const int w,const int ch)
 	return 1; // Rebuild
 }
 
-static void draw_chat(const int n)
+static void draw_chat(void)
 { // Chat Route
+	const int n = global_n;
 	if(n < 0)
 	{
 		error_simple(0,"draw_chat called on invalid n. UI coding error. Report this.");
 		return; // Bug
 	}
-	WINDOW *win = window_prepare(&window_chat,&focus_chat); // XXX Must do first
+	WINDOW *win = window_prepare(&draw_chat,&window_chat,&focus_chat); // XXX Must do first
 
 	#define TOP_LINE_HEIGHT 1
 	if(!t_peer[n].unsent)
