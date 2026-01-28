@@ -107,8 +107,7 @@ static void draw_ids(void);
 static void draw_requests_popover(void);
 static void draw_ids_popover(void);
 static void draw_settings(void);
-static void draw_tor_log(void);
-static void draw_torx_log(void);
+static void draw_logs(void);
 static void draw_torrc(void);
 static void draw_change_password(void);
 static void draw_generate(void);
@@ -131,7 +130,8 @@ enum widget_types {
 	WIDGET_PASSWORD,
 	WIDGET_INPUT_SINGLE_LINE,
 	WIDGET_INPUT_MULTI_LINE,
-	WIDGET_INPUT_NUMERICAL, // unused
+	WIDGET_INPUT_NUMERICAL,
+	WIDGET_OUTPUT_MULTI_LINE,
 	WIDGET_CHECKBOX
 // TODO how will we handle scrolled windows? As a widget or not?
 };
@@ -147,9 +147,10 @@ static struct widget {
 
 static WINDOW **window_current = NULL;
 static int *current_focus = NULL; // XXX must be set otherwise we will dereference a NULL very quick! XXX
+static size_t *current_scroll_offset = NULL;
 // XXX START One required for each route START XXX
-static int focus_login = -1, focus_settings = -1, focus_requests = -1, focus_ids = -1, focus_popover = -1, focus_contacts = -1, focus_chat = -1, focus_tor_log = -1, focus_torx_log = -1, focus_torrc = -1, focus_change_password = -1, focus_generate = -1, focus_global_kill = -1, focus_chat_actions = -1, focus_chat_settings = -1, focus_group_invite = -1, focus_group_peerlist = -1; // must initialize as -1 so that draw_* can set a default
-static WINDOW *window_login = NULL, *window_settings = NULL, *window_requests = NULL, *window_ids = NULL, *window_requests_popover = NULL, *window_ids_popover = NULL, *window_contacts = NULL, *window_chat = NULL, *window_tor_log = NULL, *window_torx_log = NULL, *window_torrc = NULL, *window_change_password = NULL, *window_generate = NULL, *window_global_kill = NULL, *window_chat_actions = NULL, *window_chat_settings = NULL, *window_group_invite = NULL, *window_group_peerlist = NULL;
+static int focus_login = -1, focus_settings = -1, focus_requests = -1, focus_ids = -1, focus_popover = -1, focus_contacts = -1, focus_chat = -1, focus_logs = -1, focus_torrc = -1, focus_change_password = -1, focus_generate = -1, focus_global_kill = -1, focus_chat_actions = -1, focus_chat_settings = -1, focus_group_invite = -1, focus_group_peerlist = -1; // must initialize as -1 so that draw_* can set a default
+static WINDOW *window_login = NULL, *window_settings = NULL, *window_requests = NULL, *window_ids = NULL, *window_requests_popover = NULL, *window_ids_popover = NULL, *window_contacts = NULL, *window_chat = NULL, *window_logs = NULL, *window_torrc = NULL, *window_change_password = NULL, *window_generate = NULL, *window_global_kill = NULL, *window_chat_actions = NULL, *window_chat_settings = NULL, *window_group_invite = NULL, *window_group_peerlist = NULL;
 // XXX END One required for each route END XXX
 
 static void (*redraw)(void) = NULL;
@@ -242,9 +243,21 @@ static size_t tmp_tor_socks_port_pos = 0;
 static size_t tmp_tor_ctrl_port_pos = 0;
 static size_t tmp_control_password_clear_pos = 0;
 
-/* Torrc state*/
+/* Torrc state */
 static char *torrc_content_local = NULL;
 static size_t torrc_pos = 0;
+
+/* Logs state */
+static char *tor_log_buffer = NULL; // Do not free in go_back
+static char *torx_log_buffer = NULL; // Do not free in go_back
+static size_t tor_log_buffer_pos = 0;
+static size_t torx_log_buffer_pos = 0;
+static uint8_t tor_log_mode = 0; // 0 == torx logs, 1 == tor logs
+static char *tmp_debug_level = NULL;
+static size_t tmp_debug_level_pos = 0;
+
+/* Scrollable state */
+static int8_t predicting = 0;
 
 static void signal_resize(int sig)
 { // Do not call ncurses functions directly from here
@@ -444,11 +457,15 @@ static const char *text_incoming_call = {0};
 
 static inline size_t align_right(size_t length)
 {
+	if(length > screen_cols)
+		return 2; // Safety
 	return screen_cols - length - 2;
 }
 
 static inline size_t align_center(size_t length)
 {
+	if(length > screen_cols)
+		return 2; // Safety
 	return (screen_cols - length) / 2;
 }
 
@@ -614,11 +631,11 @@ static int widget_checkbox(WINDOW *win,size_t *y,size_t *x,const size_t max_widt
 	return w;
 }
 
-static int widget_text_entry(WINDOW *win,size_t *y,size_t *x,const size_t max_height,const size_t max_width,int (*callback)(const int,const int),const int type,char **text_p,size_t *cursor_pos)
+static int widget_text(WINDOW *win,size_t *y,size_t *x,const size_t max_height,const size_t max_width,int (*callback)(const int,const int),const int type,char **text_p,size_t *cursor_pos)
 { // Draw a text entry. Single-line SHOULD highlight when selected. Multi-line should NOT highlight when selected.
-	if(type != WIDGET_PASSWORD && type != WIDGET_INPUT_SINGLE_LINE && type != WIDGET_INPUT_MULTI_LINE && type != WIDGET_INPUT_NUMERICAL)
+	if(type != WIDGET_PASSWORD && type != WIDGET_INPUT_SINGLE_LINE && type != WIDGET_INPUT_MULTI_LINE && type != WIDGET_OUTPUT_MULTI_LINE && type != WIDGET_INPUT_NUMERICAL)
 	{
-		error_simple(-1,"widget_text_entry passed an inappropriate type. UI coding error. Report this.");
+		error_simple(-1,"widget_text passed an inappropriate type. UI coding error. Report this.");
 		return 0;
 	}
 	const size_t start_y = *y, start_x = *x;
@@ -635,7 +652,7 @@ static int widget_text_entry(WINDOW *win,size_t *y,size_t *x,const size_t max_he
 	else
 		snprintf(array,sizeof(array),"%s",*text_p);
 	array[text_len] = '\0';
-	if(*current_focus == w && type != WIDGET_INPUT_MULTI_LINE)
+	if(*current_focus == w && type != WIDGET_INPUT_MULTI_LINE && type != WIDGET_OUTPUT_MULTI_LINE)
 		toggle_highlight(win); // highlight on
 	const size_t cursor_line_of_whole = print_wrapped(NULL,NULL,NULL,max_width,array,cursor_pos ? *cursor_pos : 0);
 	size_t print_start = 0; // number of bytes cut off from start
@@ -669,7 +686,7 @@ static int widget_text_entry(WINDOW *win,size_t *y,size_t *x,const size_t max_he
 	print_wrapped(win,y,x,max_width,&array[print_start],sizeof(array)-1-print_start-print_truncation);
 	if(*current_focus == w)
 	{
-		if(type != WIDGET_INPUT_MULTI_LINE)
+		if(type != WIDGET_INPUT_MULTI_LINE && type != WIDGET_OUTPUT_MULTI_LINE)
 			toggle_highlight(win); // highlight off
 		size_t row = start_y, col = start_x;
 		print_wrapped(NULL,&row, &col, max_width, &(*text_p)[print_start], cursor_pos ? *cursor_pos - print_start: 0);
@@ -766,11 +783,28 @@ static inline void append_character_at_cursor(const int w, const int ch)
 	*widget[w].cursor = *widget[w].cursor + 1;
 }
 
+static inline void unset_predicting(void)
+{
+	if(predicting)
+	{
+		if(current_scroll_offset)
+			*current_scroll_offset += (size_t)predicting;
+		predicting = 0;
+	}
+}
+
 static void go_back(void)
 { // Go back or exit, after cleaning up any heap allocs
+	if(current_scroll_offset)
+	{
+		unset_predicting(); // Necessary in case we had a scrollable
+		*current_scroll_offset = 0; // must reset neither or both of these
+		*current_focus = 0; // must reset neither or both of these
+		current_scroll_offset = NULL; // do after unset_predicting, in case we had a scrollable
+	}
 	if(window_login || window_contacts)
 		running = false;
-	else if(window_chat || window_requests || window_ids || window_settings || window_generate || window_tor_log || window_torx_log || window_global_kill)
+	else if(window_chat || window_requests || window_ids || window_settings || window_generate || window_logs || window_global_kill)
 	{
 		if(window_chat)
 			global_n = -1;
@@ -796,6 +830,8 @@ static void go_back(void)
 			torx_free((void*)&add_identifier);
 			torx_free((void*)&add_id);
 		}
+		else if(window_logs)
+			torx_free((void*)&tmp_debug_level);
 		draw_contacts();
 	}
 	else if(window_chat_actions || window_chat_settings || window_group_invite || window_group_peerlist)
@@ -835,6 +871,7 @@ static int keypress(const int w,const int ch)
 		return 0; // Sanity check
 	}
 	const size_t max_height = screen_rows - 3; // TODO this should be specific to each page
+	int ret;
 	if(ch == KEY_ESC || ch == KEY_HOME)
 		go_back();
 	else if(ch == '\t' || ch == KEY_BTAB)
@@ -842,7 +879,7 @@ static int keypress(const int w,const int ch)
 		*current_focus = (*current_focus + 1) % (int)(torx_allocation_len(widget) / sizeof(struct widget));
 		return 1; // Rebuild
 	}
-	else if((ch == KEY_PPAGE || ch == KEY_NPAGE) && widget[w].type == WIDGET_INPUT_MULTI_LINE && 1 + print_wrapped(NULL, NULL, NULL, widget[w].max_width, *widget[w].text, torx_allocation_len(*widget[w].text)-1) >= max_height)
+	else if((ch == KEY_PPAGE || ch == KEY_NPAGE) && (widget[w].type == WIDGET_INPUT_MULTI_LINE || widget[w].type == WIDGET_OUTPUT_MULTI_LINE) && 1 + print_wrapped(NULL, NULL, NULL, widget[w].max_width, *widget[w].text, torx_allocation_len(*widget[w].text)-1) >= max_height)
 	{ // PgUp / PgDwn (NOTE: Not just handled here)
 		if(ch == KEY_PPAGE)
 		{
@@ -860,18 +897,28 @@ static int keypress(const int w,const int ch)
 	}
 	else if(ch == KEY_UP)
 	{
-		if(widget[w].type == WIDGET_INPUT_MULTI_LINE)
+		if(widget[w].type == WIDGET_INPUT_MULTI_LINE || widget[w].type == WIDGET_OUTPUT_MULTI_LINE)
 			return move_cursor_up(w);
 		else if(*current_focus > 0)
-			*current_focus = *current_focus - 1;
+		{
+			if(predicting == -1) // We predicted we would go in the other direction and need to correct
+				unset_predicting();
+			else
+				*current_focus = *current_focus - 1;
+		}
 		return 1; // Rebuild
 	}
 	else if(ch == KEY_DOWN)
 	{
-		if(widget[w].type == WIDGET_INPUT_MULTI_LINE)
+		if(widget[w].type == WIDGET_INPUT_MULTI_LINE || widget[w].type == WIDGET_OUTPUT_MULTI_LINE)
 			return move_cursor_down(w);
 		else if(*current_focus < (int)(torx_allocation_len(widget) / sizeof(struct widget) - 1))
-			*current_focus = *current_focus + 1;
+		{
+			if(predicting == 1) // We predicted we would go in the other direction and need to correct
+				unset_predicting();
+			else
+				*current_focus = *current_focus + 1;
+		}
 		return 1; // Rebuild
 	}
 	else if(ch == KEY_LEFT)
@@ -925,23 +972,21 @@ static int keypress(const int w,const int ch)
 		}
 		beep();
 	}
-	else if(widget[w].type == WIDGET_INPUT_NUMERICAL && !(ch >= '0' && ch <= '9'))
-		beep(); // do nothing, ignore invalid entry
-	else if(ch >= 32 && ch <= 126 && widget[w].cursor && widget[w].text) // TODO Incompatible with utf8/wide characters
+	else if(ch >= 32 && ch <= 126 && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE) // TODO Incompatible with utf8/wide characters
 	{ // Applicable to text widgets only. Captures space but NOT enter.
-		append_character_at_cursor(w,ch);
-		return 1; // Rebuild
+		if(widget[w].type == WIDGET_INPUT_NUMERICAL && (ch < '0' || ch > '9'))
+			beep(); // do nothing, ignore invalid entry
+		else
+		{
+			append_character_at_cursor(w,ch);
+			return 1; // Rebuild
+		}
 	}
-	else if(widget[w].callback)
-		return widget[w].callback(w,ch);
+	else if(widget[w].callback && (ret = widget[w].callback(w,ch)))
+		return ret;
 	else if(widget[w].type == WIDGET_INPUT_MULTI_LINE && (ch == '\n' || ch == KEY_ENTER || ch =='\r'))
 	{ // Append newline to WIDGET_INPUT_MULTI_LINE
 		append_character_at_cursor(w,'\n');
-		return 1; // Rebuild
-	}
-	else if(widget[w].type != WIDGET_INPUT_MULTI_LINE)
-	{
-		*current_focus = (*current_focus + 1) % (int)(torx_allocation_len(widget) / sizeof(struct widget));
 		return 1; // Rebuild
 	}
 	return 0; // Do not rebuild
@@ -1006,13 +1051,13 @@ static void draw_login(void)
 	print_wrapped(win,&fy,&fx,screen_cols-(fx*2),text_welcome,strlen(text_welcome));
 	wattroff(win,A_BOLD); // bold off
 
-	fy += 2, fx = 2; // fy must be += because there might be wrap
+	fy += 2, fx = 2;
 	print_wrapped(win,&fy,&fx,screen_cols-(fx*2),text_password,strlen(text_password));
 
-	fy += 1, fx = 4; // fy must be += because there might be wrap
-	widget_text_entry(win,&fy,&fx,screen_rows-fy,screen_cols-(fx*2),callback_password,WIDGET_PASSWORD,&password,&pw_cursor);
+	fy += 1, fx = 4;
+	widget_text(win,&fy,&fx,screen_rows-fy,screen_cols-(fx*2),callback_password,WIDGET_PASSWORD,&password,&pw_cursor);
 
-	fy += 2,fx = 4; // fy must be += because there might be wrap
+	fy += 2,fx = 4;
 	widget_checkbox(win,&fy,&fx,screen_cols-(fx*2),callback_pw_show,1,text_show_password,pw_show);
 
 	fy += 1, fx = 4;
@@ -1836,7 +1881,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), label_text, len);
 			*fyp += 1,*fxp = screen_cols - (tmp_tor_location ? strlen(tmp_tor_location) : 0) - 2;
-			widget_text_entry(win,fyp,fxp,1,screen_cols-(2*2),callback_tor_location,WIDGET_INPUT_SINGLE_LINE,&tmp_tor_location,&tmp_tor_location_pos);
+			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_tor_location,WIDGET_INPUT_SINGLE_LINE,&tmp_tor_location,&tmp_tor_location_pos);
 		}
 		else if(item_to_draw == 5)
 		{ // Select Snowflake binary location (effective immediately)
@@ -1844,7 +1889,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), label_text, len);
 			*fyp += 1,*fxp = screen_cols - (tmp_snowflake_location ? strlen(tmp_snowflake_location) : 0) - 2;
-			widget_text_entry(win,fyp,fxp,1,screen_cols-(2*2),callback_snowflake_location,WIDGET_INPUT_SINGLE_LINE,&tmp_snowflake_location,&tmp_snowflake_location_pos);
+			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_snowflake_location,WIDGET_INPUT_SINGLE_LINE,&tmp_snowflake_location,&tmp_snowflake_location_pos);
 		}
 		else if(item_to_draw == 6)
 		{ // Select Lyrebird binary location (effective immediately)
@@ -1852,7 +1897,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), label_text, len);
 			*fyp += 1,*fxp = screen_cols - (tmp_lyrebird_location ? strlen(tmp_lyrebird_location) : 0) - 2;
-			widget_text_entry(win,fyp,fxp,1,screen_cols-(2*2),callback_lyrebird_location,WIDGET_INPUT_SINGLE_LINE,&tmp_lyrebird_location,&tmp_lyrebird_location_pos);
+			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_lyrebird_location,WIDGET_INPUT_SINGLE_LINE,&tmp_lyrebird_location,&tmp_lyrebird_location_pos);
 		}
 		else if(item_to_draw == 7)
 		{ // Select Conjure binary location (effective immediately)
@@ -1860,35 +1905,35 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), label_text, len);
 			*fyp += 1,*fxp = screen_cols - (tmp_conjure_location ? strlen(tmp_conjure_location) : 0) - 2;
-			widget_text_entry(win,fyp,fxp,1,screen_cols-(2*2),callback_conjure_location,WIDGET_INPUT_SINGLE_LINE,&tmp_conjure_location,&tmp_conjure_location_pos);
+			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_conjure_location,WIDGET_INPUT_SINGLE_LINE,&tmp_conjure_location,&tmp_conjure_location_pos);
 		}
 		else if(item_to_draw == 8)
 		{ // Maximum CPU threads for TorX-ID generation
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_cpu, strlen(text_set_cpu));
 			*fyp += 1,*fxp = screen_cols - (tmp_threads_max ? strlen(tmp_threads_max) : 0) - 2;
-			widget_text_entry(win,fyp,fxp,1,screen_cols-(2*2),callback_threads,WIDGET_INPUT_NUMERICAL,&tmp_threads_max,&tmp_threads_max_pos);
+			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_threads,WIDGET_INPUT_NUMERICAL,&tmp_threads_max,&tmp_threads_max_pos);
 		}
 		else if(item_to_draw == 9)
 		{ // Minimum Suffix Length for TorX-ID generation
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_suffix, strlen(text_set_suffix));
 			*fyp += 1,*fxp = screen_cols - (tmp_suffix_length ? strlen(tmp_suffix_length) : 0) - 2;
-			widget_text_entry(win,fyp,fxp,1,screen_cols-(2*2),callback_suffix,WIDGET_INPUT_NUMERICAL,&tmp_suffix_length,&tmp_suffix_length_pos);
+			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_suffix,WIDGET_INPUT_NUMERICAL,&tmp_suffix_length,&tmp_suffix_length_pos);
 		}
 		else if(item_to_draw == 10)
 		{ // Single-Use TorX-ID expiration time (days)
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_validity_sing, strlen(text_set_validity_sing));
 			*fyp += 1,*fxp = screen_cols - (tmp_sing_expiration_days ? strlen(tmp_sing_expiration_days) : 0) - 2;
-			widget_text_entry(win,fyp,fxp,1,screen_cols-(2*2),callback_sing_days,WIDGET_INPUT_NUMERICAL,&tmp_sing_expiration_days,&tmp_sing_expiration_days_pos);
+			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_sing_days,WIDGET_INPUT_NUMERICAL,&tmp_sing_expiration_days,&tmp_sing_expiration_days_pos);
 		}
 		else if(item_to_draw == 11)
 		{ // Multiple-Use TorX-ID expiration time (days)
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_validity_mult, strlen(text_set_validity_mult));
 			*fyp += 1,*fxp = screen_cols - (tmp_mult_expiration_days ? strlen(tmp_mult_expiration_days) : 0) - 2;
-			widget_text_entry(win,fyp,fxp,1,screen_cols-(2*2),callback_mult_dats,WIDGET_INPUT_NUMERICAL,&tmp_mult_expiration_days,&tmp_mult_expiration_days_pos);
+			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_mult_dats,WIDGET_INPUT_NUMERICAL,&tmp_mult_expiration_days,&tmp_mult_expiration_days_pos);
 		}
 		else if(item_to_draw == 12)
 		{ // Automatically Accept Incoming Mult Requests
@@ -1906,21 +1951,21 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_tor_port_socks, strlen(text_set_tor_port_socks));
 			*fyp += 1,*fxp = screen_cols - (tmp_tor_socks_port ? strlen(tmp_tor_socks_port) : 0) - 2;
-			widget_text_entry(win,fyp,fxp,1,screen_cols-(2*2),callback_socks_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_socks_port,&tmp_tor_socks_port_pos);
+			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_socks_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_socks_port,&tmp_tor_socks_port_pos);
 		}
 		else if(item_to_draw == 14)
 		{ // Tor Control Port
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_tor_port_ctrl, strlen(text_set_tor_port_ctrl));
 			*fyp += 1,*fxp = screen_cols - (tmp_tor_ctrl_port ? strlen(tmp_tor_ctrl_port) : 0) - 2;
-			widget_text_entry(win,fyp,fxp,1,screen_cols-(2*2),callback_ctrl_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_ctrl_port,&tmp_tor_ctrl_port_pos);
+			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_ctrl_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_ctrl_port,&tmp_tor_ctrl_port_pos);
 		}
 		else if(item_to_draw == 15)
 		{ // Tor Control Password
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_tor_password, strlen(text_set_tor_password));
 			*fyp += 1,*fxp = screen_cols - (tmp_control_password_clear ? strlen(tmp_control_password_clear) : 0) - 2;
-			widget_text_entry(win,fyp,fxp,1,screen_cols-(2*2),callback_ctrl_pass,WIDGET_INPUT_SINGLE_LINE,&tmp_control_password_clear,&tmp_control_password_clear_pos);
+			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_ctrl_pass,WIDGET_INPUT_SINGLE_LINE,&tmp_control_password_clear,&tmp_control_password_clear_pos);
 		}
 		else
 			return 0; // Printed nothing
@@ -1932,7 +1977,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_identifier, strlen(text_identifier));
 			*fyp += 1,*fxp = screen_cols - (tmp_rename ? strlen(tmp_rename) : 0) - 2;
-			widget_text_entry(win,fyp,fxp,1,screen_cols-(2*2),callback_rename,WIDGET_INPUT_SINGLE_LINE,&tmp_rename,&tmp_rename_pos);
+			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_rename,WIDGET_INPUT_SINGLE_LINE,&tmp_rename,&tmp_rename_pos);
 		}
 		else if(item_to_draw == 1)
 		{
@@ -2000,7 +2045,6 @@ static int callback_popover(const int w,const int ch)
 	(void)w;
 	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
 	{
-		focus_popover = -1;
 		tmp_rename = getter_string(treeview_n,INT_MIN,-1,offsetof(struct peer_list,peernick));
 		tmp_rename_pos = tmp_rename ? torx_allocation_len(tmp_rename) - 1 : 0;
 		if(window_ids)
@@ -2017,6 +2061,7 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 		return;
 	const size_t widgets_existing_before_scrollable = torx_allocation_len(widget) / sizeof(struct widget);
 	size_t iter = *scroll_offset;
+	current_scroll_offset = scroll_offset;
 	if(win == window_ids || win == window_requests)
 	{
 		int len;
@@ -2055,16 +2100,20 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 		while(scrollable(win,fyp,fxp,iter)) // Prints a "widget" for every iter. Returns 0 when there is no space left, or we run out of widgets to print.
 			iter++; // Draw widgets until there is no space left on the screen
 	iter--; // NECESSARY.
-	if(*focus == (int)widgets_existing_before_scrollable && *scroll_offset) // XXX DO NOT MODIFY
-	{ // Scrolling up
+	if(*focus == (int)widgets_existing_before_scrollable && *scroll_offset) // XXX DO NOT MODIFY jfo2f2fjoi2jf21
+	{ // Predicting that we will continue scrolling up
+		predicting = 1;
 		*scroll_offset = *scroll_offset - 1; // XXX DO NOT MODIFY
 		*focus = *focus + 1; // XXX DO NOT MODIFY
 	}
 	else if(*focus == (int)(iter - *scroll_offset + widgets_existing_before_scrollable) && *fyp > screen_rows - 2) // XXX DO NOT MODIFY ajosdf02f02f
-	{ // Scroll down
+	{ // Predicting that we will continue scrolling down
+		predicting = -1;
 		*scroll_offset = *scroll_offset + 1; // XXX DO NOT MODIFY
 		*focus = *focus - 1; // XXX DO NOT MODIFY
 	}
+	else
+		predicting = 0;
 	if(*fyp > screen_rows - 2) // Draw border again (if we ran over it with scrollable)
 		for(size_t x = 1; x < screen_cols - 1; x++)
 			mvwaddch(win, (int)screen_rows-1, (int)x, ACS_HLINE);
@@ -2075,7 +2124,6 @@ static int callback_torrc(const int w,const int ch)
 	(void)w;
 	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
 	{
-		focus_torrc = -1; // unset, important
 		torx_free((void*)&torrc_content_local);
 		torrc_pos = 0;
 		pthread_rwlock_rdlock(&mutex_global_variable); // 🟧
@@ -2090,10 +2138,7 @@ static int callback_change_password(const int w,const int ch)
 {
 	(void)w;
 	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		focus_change_password = -1; // unset, important
 		draw_change_password();
-	}
 	return 0; // Do not rebuild
 }
 
@@ -2137,25 +2182,60 @@ static void draw_settings(void)
 	widget_draw_cursor(win); // XXX Must do last
 }
 
-static void draw_tor_log(void)
-{ // Tor Log Route
-	WINDOW *win = window_prepare(&draw_tor_log,&window_tor_log,&focus_tor_log); // XXX Must do first
-	widget_next_has_default_focus(); // XXX Set default widget focus
-
-
-
-
-	widget_draw_cursor(win); // XXX Must do last
+static int callback_toggle_logs(const int w,const int ch)
+{
+	(void)w;
+	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
+	{
+		tor_log_mode = !tor_log_mode;
+		return 1; // Rebuild
+	}
+	return 0; // Do not rebuild
 }
 
-static void draw_torx_log(void)
-{ // TorX Log Route
-	WINDOW *win = window_prepare(&draw_torx_log,&window_torx_log,&focus_torx_log); // XXX Must do first
+static int callback_debug_level(const int w,const int ch)
+{
+	(void)w;
+	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
+	{
+		if(tmp_debug_level)
+			torx_debug_level((int8_t)atoi(tmp_debug_level));
+	}
+	else
+		return 0; // Do not rebuild
+	return 1; // Rebuild
+}
+
+static void draw_logs(void)
+{ // Tor Log Route
+	WINDOW *win = window_prepare(&draw_logs,&window_logs,&focus_logs); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
+	size_t fy = 0,fx = 2;
+	// Draw top line widgets
+	wattron(win,A_BOLD); // bold on
+	mvwprintw_size(win,fy,fx,"%s",tor_log_mode ? text_tor_log : text_torx_log); // do not wrap
+	wattroff(win,A_BOLD); // bold off
 
+	char label[256];
+	size_t label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",tor_log_mode ? text_torx_log : text_tor_log);
+	fx = align_right(label_len);
+	widget_button(win,&fy,&fx,label_len,callback_toggle_logs,label);
 
+	if(!tor_log_mode)
+	{ // TorX logging level
+		const size_t len = strlen(text_debug_level);
+		fy -= 1, fx = align_right(label_len) - 1 - len - 2;
+		print_wrapped(win,&fy,&fx,screen_cols-(2*2),text_debug_level,len);
+		fx = align_right(label_len) - 2;
+		widget_text(win,&fy,&fx,screen_rows - 2,inner_width,callback_debug_level,WIDGET_INPUT_NUMERICAL,&tmp_debug_level,&tmp_debug_level_pos);
+		fy += 1;
+	}
 
+	fx = align_center(inner_width);
+	widget_text(win,&fy,&fx,screen_rows - 2,inner_width,NULL,WIDGET_OUTPUT_MULTI_LINE,tor_log_mode ? &tor_log_buffer : &torx_log_buffer,tor_log_mode ? &tor_log_buffer_pos : &torx_log_buffer_pos);
+
+	sodium_memzero(label,sizeof(label));
 	widget_draw_cursor(win); // XXX Must do last
 }
 
@@ -2191,10 +2271,9 @@ static void draw_torrc(void)
 	fx = align_right(label_len);
 	widget_button(win,&fy,&fx,label_len,callback_save_torrc,label);
 
-	// Print unsent
 	fx = align_center(inner_width);
 	widget_next_has_default_focus(); // XXX Set default widget focus
-	widget_text_entry(win,&fy,&fx,screen_rows - 2,inner_width,NULL,WIDGET_INPUT_MULTI_LINE,&torrc_content_local,&torrc_pos);
+	widget_text(win,&fy,&fx,screen_rows - 2,inner_width,NULL,WIDGET_INPUT_MULTI_LINE,&torrc_content_local,&torrc_pos);
 
 	sodium_memzero(label,sizeof(label));
 	widget_draw_cursor(win); // XXX Must do last
@@ -2220,32 +2299,32 @@ static void draw_change_password(void)
 	wattroff(win,A_BOLD); // bold off
 
 	size_t label_len = strlen(text_old_password);
-	fy += 2, fx = align_center(label_len); // fy must be += because there might be wrap
+	fy += 2, fx = align_center(label_len);
 	print_wrapped(win,&fy,&fx,screen_cols-(2*2),text_old_password,label_len);
 
-	fy += 1, fx = align_center(password_old ? torx_allocation_len(password_old) - 1 : 0); // fy must be += because there might be wrap
-	widget_text_entry(win,&fy,&fx,screen_rows-fy,screen_cols-(2*2),NULL,WIDGET_PASSWORD,&password_old,&pw_old_cursor);
+	fy += 1, fx = align_center(password_old ? torx_allocation_len(password_old) - 1 : 0);
+	widget_text(win,&fy,&fx,screen_rows-fy,screen_cols-(2*2),NULL,WIDGET_PASSWORD,&password_old,&pw_old_cursor);
 
 	label_len = strlen(text_new_password);
-	fy += 2, fx = align_center(label_len); // fy must be += because there might be wrap
+	fy += 2, fx = align_center(label_len);
 	print_wrapped(win,&fy,&fx,screen_cols-(2*2),text_new_password,label_len);
 
-	fy += 1, fx = align_center(password_new ? torx_allocation_len(password_new) - 1 : 0); // fy must be += because there might be wrap
-	widget_text_entry(win,&fy,&fx,screen_rows-fy,screen_cols-(2*2),NULL,WIDGET_PASSWORD,&password_new,&pw_new_cursor);
+	fy += 1, fx = align_center(password_new ? torx_allocation_len(password_new) - 1 : 0);
+	widget_text(win,&fy,&fx,screen_rows-fy,screen_cols-(2*2),NULL,WIDGET_PASSWORD,&password_new,&pw_new_cursor);
 
 	label_len = strlen(text_new_password_again);
-	fy += 2, fx = align_center(label_len); // fy must be += because there might be wrap
+	fy += 2, fx = align_center(label_len);
 	print_wrapped(win,&fy,&fx,screen_cols-(2*2),text_new_password_again,label_len);
 
-	fy += 1, fx = align_center(password_verify ? torx_allocation_len(password_verify) - 1 : 0); // fy must be += because there might be wrap
-	widget_text_entry(win,&fy,&fx,screen_rows-fy,screen_cols-(2*2),NULL,WIDGET_PASSWORD,&password_verify,&pw_verify_cursor);
+	fy += 1, fx = align_center(password_verify ? torx_allocation_len(password_verify) - 1 : 0);
+	widget_text(win,&fy,&fx,screen_rows-fy,screen_cols-(2*2),NULL,WIDGET_PASSWORD,&password_verify,&pw_verify_cursor);
 
 	char label[256];
 	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_change_password);
 	fy += 2,fx = align_center(label_len);
 	widget_button(win,&fy,&fx,label_len,callback_change_password_attempt,label);
 
-	fy += 1,fx = align_center(4 + strlen(text_show_password)); // fy must be += because there might be wrap
+	fy += 1,fx = align_center(4 + strlen(text_show_password));
 	widget_checkbox(win,&fy,&fx,screen_cols-(2*2),callback_pw_show,1,text_show_password,pw_show);
 
 	sodium_memzero(label,sizeof(label));
@@ -2361,23 +2440,23 @@ static void draw_generate(void)
 
 	wattron(win,A_BOLD); // bold on
 	label_len = strlen(group_mode ? text_add_group_by : text_add_peer_by);
-	fy += 2, fx = align_center(label_len); // fy must be += because there might be wrap
+	fy += 2, fx = align_center(label_len);
 	print_wrapped(win,&fy,&fx,screen_cols-(2*2),group_mode ? text_add_group_by : text_add_peer_by,label_len);
 	wattroff(win,A_BOLD); // bold off
 
 	label_len = strlen(group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier);
-	fy += 2, fx = align_center(label_len); // fy must be += because there might be wrap
+	fy += 2, fx = align_center(label_len);
 	print_wrapped(win,&fy,&fx,screen_cols-(2*2),group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier,label_len);
 
-	fy += 1, fx = align_center(add_identifier ? torx_allocation_len(add_identifier) - 1 : 0); // fy must be += because there might be wrap
-	widget_text_entry(win,&fy,&fx,screen_rows-fy,screen_cols-(2*2),NULL,WIDGET_INPUT_SINGLE_LINE,&add_identifier,&add_identifier_cursor);
+	fy += 1, fx = align_center(add_identifier ? torx_allocation_len(add_identifier) - 1 : 0);
+	widget_text(win,&fy,&fx,screen_rows-fy,screen_cols-(2*2),NULL,WIDGET_INPUT_SINGLE_LINE,&add_identifier,&add_identifier_cursor);
 
 	label_len = strlen(group_mode ? text_placeholder_add_group_id : text_placeholder_add_onion);
-	fy += 2, fx = align_center(label_len); // fy must be += because there might be wrap
+	fy += 2, fx = align_center(label_len);
 	print_wrapped(win,&fy,&fx,screen_cols-(2*2),group_mode ? text_placeholder_add_group_id : text_placeholder_add_onion,label_len);
 
-	fy += 1, fx = align_center(add_id ? torx_allocation_len(add_id) - 1 : 0); // fy must be += because there might be wrap
-	widget_text_entry(win,&fy,&fx,screen_rows-fy,screen_cols-(2*2),NULL,WIDGET_INPUT_SINGLE_LINE,&add_id,&add_id_cursor);
+	fy += 1, fx = align_center(add_id ? torx_allocation_len(add_id) - 1 : 0);
+	widget_text(win,&fy,&fx,screen_rows-fy,screen_cols-(2*2),NULL,WIDGET_INPUT_SINGLE_LINE,&add_id,&add_id_cursor);
 
 	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",group_mode ? text_button_join : text_button_add);
 	fy += 2,fx = align_center(label_len);
@@ -2385,16 +2464,16 @@ static void draw_generate(void)
 
 	wattron(win,A_BOLD); // bold on
 	label_len = strlen(group_mode ? text_generate_group_for : text_generate_for);
-	fy += 2, fx = align_center(label_len); // fy must be += because there might be wrap
+	fy += 2, fx = align_center(label_len);
 	print_wrapped(win,&fy,&fx,screen_cols-(2*2),group_mode ? text_generate_group_for : text_generate_for,label_len);
 	wattroff(win,A_BOLD); // bold off
 
 	label_len = strlen(group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier);
-	fy += 2, fx = align_center(label_len); // fy must be += because there might be wrap
+	fy += 2, fx = align_center(label_len);
 	print_wrapped(win,&fy,&fx,screen_cols-(2*2),group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier,label_len);
 
-	fy += 1, fx = align_center(generate_input ? torx_allocation_len(generate_input) - 1 : 0); // fy must be += because there might be wrap
-	widget_text_entry(win,&fy,&fx,screen_rows-fy,screen_cols-(2*2),NULL,WIDGET_INPUT_SINGLE_LINE,&generate_input,&generate_input_cursor);
+	fy += 1, fx = align_center(generate_input ? torx_allocation_len(generate_input) - 1 : 0);
+	widget_text(win,&fy,&fx,screen_rows-fy,screen_cols-(2*2),NULL,WIDGET_INPUT_SINGLE_LINE,&generate_input,&generate_input_cursor);
 
 	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",group_mode ? text_button_generate_invite : text_button_sing);
 	fy += 2,fx = align_center(label_len);
@@ -2407,7 +2486,7 @@ static void draw_generate(void)
 	if(generate_output)
 	{
 		label_len = strlen(generate_output);
-		fy += 2, fx = align_center(label_len); // fy must be += because there might be wrap
+		fy += 2, fx = align_center(label_len);
 		print_wrapped(win,&fy,&fx,screen_cols-(2*2),generate_output,label_len);
 	}
 
@@ -2415,14 +2494,38 @@ static void draw_generate(void)
 	widget_draw_cursor(win); // XXX Must do last
 }
 
+static int callback_emit_global_kill(const int w,const int ch)
+{
+	(void)w;
+	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
+	{
+		kill_code(-1,NULL);
+		go_back();
+	}
+	return 0; // Do not rebuild
+}
+
 static void draw_global_kill(void)
 { // Global Kill Route
 	WINDOW *win = window_prepare(&draw_global_kill,&window_global_kill,&focus_global_kill); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
+	size_t fy = 0,fx = 2;
+	// Draw top line widgets
+	wattron(win,A_BOLD); // bold on
+	mvwprintw_size(win,fy,fx,"%s",text_global_kill); // do not wrap
+	wattroff(win,A_BOLD); // bold off
 
+	size_t label_len = strlen(text_global_kill_warning);
+	fy += 2, fx = 2;
+	print_wrapped(win,&fy,&fx,screen_cols-(2*2),text_global_kill_warning,label_len);
 
+	char label[256];
+	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_emit_global_kill);
+	fy += 2,fx = align_center(label_len);
+	widget_button(win,&fy,&fx,label_len,callback_emit_global_kill,label);
 
+	sodium_memzero(label,sizeof(label));
 	widget_draw_cursor(win); // XXX Must do last
 }
 
@@ -2496,8 +2599,6 @@ static int callback_settings(const int w,const int ch)
 	(void)w;
 	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
 	{
-		focus_settings = -1; // unset, important
-
 		pthread_rwlock_rdlock(&mutex_global_variable); // 🟧
 		tmp_snowflake_location = torx_copy(snowflake_location);
 		tmp_lyrebird_location = torx_copy(lyrebird_location);
@@ -2603,24 +2704,14 @@ static void draw_ids(void)
 	widget_draw_cursor(win); // XXX Must do last
 }
 
-static int callback_tor_log(const int w,const int ch)
+static int callback_logs(const int w,const int ch)
 {
 	(void)w;
 	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
 	{
-		focus_tor_log = -1; // unset, important
-		draw_tor_log();
-	}
-	return 0; // Do not rebuild
-}
-
-static int callback_torx_log(const int w,const int ch)
-{
-	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		focus_torx_log = -1; // unset, important
-		draw_torx_log();
+		tmp_debug_level = torx_itoa((size_t)torx_debug_level(-1));
+		tmp_debug_level_pos = tmp_debug_level ? torx_allocation_len(tmp_debug_level) - 1 : 0;
+		draw_logs();
 	}
 	return 0; // Do not rebuild
 }
@@ -2629,10 +2720,7 @@ static int callback_generate(const int w,const int ch)
 {
 	(void)w;
 	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		focus_generate = -1; // unset, important
 		draw_generate();
-	}
 	return 0; // Do not rebuild
 }
 
@@ -2640,10 +2728,7 @@ static int callback_global_kill(const int w,const int ch)
 {
 	(void)w;
 	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		focus_global_kill = -1; // unset, important
 		draw_global_kill();
-	}
 	return 0; // Do not rebuild
 }
 
@@ -2651,10 +2736,7 @@ static int callback_chat_actions(const int w,const int ch)
 {
 	(void)w;
 	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		focus_chat_actions = -1; // unset, important
 		draw_chat_actions();
-	}
 	return 0; // Do not rebuild
 }
 
@@ -2662,10 +2744,7 @@ static int callback_chat_settings(const int w,const int ch)
 {
 	(void)w;
 	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		focus_chat_settings = -1; // unset, important
 		draw_chat_settings();
-	}
 	return 0; // Do not rebuild
 }
 
@@ -2673,10 +2752,7 @@ static int callback_group_invite(const int w,const int ch)
 {
 	(void)w;
 	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		focus_group_invite = -1; // unset, important
 		draw_group_invite();
-	}
 	return 0; // Do not rebuild
 }
 
@@ -2684,10 +2760,7 @@ static int callback_group_peerlist(const int w,const int ch)
 {
 	(void)w;
 	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		focus_group_peerlist = -1; // unset, important
 		draw_group_peerlist();
-	}
 	return 0; // Do not rebuild
 }
 
@@ -2699,7 +2772,6 @@ static int callback_peer(const int w,const int ch)
 		global_n = selected_n;
 		t_peer[global_n].unread = 0;
 		chat_scroll_lines = 0;
-		focus_chat = -1; // unset, important
 		draw_chat();
 	}
 	return 0; // Do not rebuild
@@ -2709,10 +2781,7 @@ static int callback_requests(const int w,const int ch)
 {
 	(void)w;
 	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		focus_requests = -1; // unset, important
 		draw_requests();
-	}
 	return 0; // Do not rebuild
 }
 
@@ -2720,10 +2789,7 @@ static int callback_ids(const int w,const int ch)
 {
 	(void)w;
 	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		focus_ids = -1; // unset, important
 		draw_ids();
-	}
 	return 0; // Do not rebuild
 }
 
@@ -2758,7 +2824,7 @@ static void draw_contacts(void)
 
 	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_logs);
 	fx = align_right(label_len);
-	widget_button(win,&fy,&fx,label_len,NULL,label);
+	widget_button(win,&fy,&fx,label_len,callback_logs,label);
 
 	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_settings);
 	fx = align_right(label_len);
@@ -2766,7 +2832,7 @@ static void draw_contacts(void)
 
 	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_global_kill);
 	fx = align_right(label_len);
-	widget_button(win,&fy,&fx,label_len,NULL,label);
+	widget_button(win,&fy,&fx,label_len,callback_global_kill,label);
 
 	int len = 0;
 	int *array;
@@ -3050,10 +3116,28 @@ static void draw_chat(void)
 	// Print unsent
 	fy = mid + 1,fx = align_center(inner_width);
 	widget_next_has_default_focus(); // XXX Set default widget focus
-	widget_text_entry(win,&fy,&fx,screen_rows - mid - 2,inner_width,callback_message_input,WIDGET_INPUT_MULTI_LINE,&t_peer[n].unsent,&t_peer[n].unsent_pos);
+	widget_text(win,&fy,&fx,screen_rows - mid - 2,inner_width,callback_message_input,WIDGET_INPUT_MULTI_LINE,&t_peer[n].unsent,&t_peer[n].unsent_pos);
 
 	sodium_memzero(label,sizeof(label));
 	widget_draw_cursor(win); // XXX Must do last
+}
+
+static inline void shift_or_append(char **destination,char **source,size_t *cursor_p)
+{ // NO SAFETY CHECKS: be careful not to de-reference a null. THIS IS ONLY FOR USE IN await_key_or_signal.
+	if(!*destination)
+	{ // Just shift it over
+		*destination = *source;
+		*source = NULL; // necessary in await_key_or_signal
+		*cursor_p = torx_allocation_len(*destination) - 1; // Set at end
+	}
+	else
+	{ // Append
+		const size_t former_len = torx_allocation_len(*destination);
+		*destination = torx_realloc(*destination,former_len + torx_allocation_len(*source) - 1); // cut off one null pointer
+		memcpy(&(*destination)[former_len-1],*source,torx_allocation_len(*source));
+		if(*cursor_p == former_len - 1)
+			*cursor_p = torx_allocation_len(*destination) - 1; // Set at end
+	}
 }
 
 static int await_key_or_signal(WINDOW *win)
@@ -3200,15 +3284,21 @@ static int await_key_or_signal(WINDOW *win)
 				}
 				else if(cb_page->cb_type == ENUM_ERROR)
 				{
-					// currently N/A, rely on debug_file until we put it in a route
+					shift_or_append(&torx_log_buffer,&cb_page->cb_args->mem_charp_a,&torx_log_buffer_pos);
+					if(window_logs && !tor_log_mode)
+						redraw();
 				}
 				else if(cb_page->cb_type == ENUM_FATAL)
 				{
-					// currently N/A, rely on debug_file until we put it in a route
+					shift_or_append(&torx_log_buffer,&cb_page->cb_args->mem_charp_a,&torx_log_buffer_pos);
+					if(window_logs && !tor_log_mode)
+						redraw();
 				}
 				else if(cb_page->cb_type == ENUM_TOR_LOG)
 				{
-					// currently N/A
+					shift_or_append(&tor_log_buffer,&cb_page->cb_args->mem_charp_a,&tor_log_buffer_pos);
+					if(window_logs && tor_log_mode)
+						redraw();
 				}
 				else if(cb_page->cb_type == ENUM_CUSTOM_SETTING)
 				{
