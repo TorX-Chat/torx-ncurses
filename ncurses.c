@@ -140,7 +140,7 @@ static struct widget {
 	// Consider saving start_y and start_x so we can re-draw individual widgets rather than the while route (especially applicable to checkbox/toggle.
 	int type;
 	size_t max_width;
-	int (*callback)(const int,const int); // typically holds the functionality to be executed upon ENTER press
+	int (*callback)(const int); // typically holds the functionality to be executed upon ENTER press
 	char **text;
 	size_t *cursor;
 } * widget = {0}; // REMEMBER to free this list whenever changing a page. Remember to initialize new widgets with zero_w
@@ -174,7 +174,7 @@ static int notify_fds[2] = { -1, -1 }; // triggered by library callbacks, indica
 
 /* Chat state */
 static size_t prior_print_start = 0; // TODO this should really be per peer, but this isn't just for message entry. Can't have it per widget because widgets get destroyed
-static size_t chat_scroll_lines = 0; // Number of lines currently scrolled
+static size_t chat_scroll_lines = 0; // Number of lines currently scrolled. Similar concept with _scroll_offset
 static size_t chat_scroll_max;
 static size_t chat_scroll_jump; // Number of lines to move upon PgUp PgDn (set by draw_chat)
 
@@ -473,7 +473,7 @@ static inline size_t print_wrapped(WINDOW *win,size_t *y,size_t *x,const size_t 
 { // NOTE: y and x must be initialized // TODO eliminate mvwprintw_size, except where wrapping is not desired
 	if(max_width && str && len)
 	{
-		const uint8_t printing = (win && y && x) ? 1: 0;
+		const uint8_t printing = (win && y && x) ? 1 : 0;
 		size_t offset_y = 0,offset_x = 0;
 		for(size_t iter = 0; iter < len && str[iter] != '\0'; iter++)
 		{
@@ -605,7 +605,7 @@ static void toggle_highlight(WINDOW *win)
 	highlight_active = !highlight_active;
 }
 
-static int widget_button(WINDOW *win,size_t *y,size_t *x,const size_t max_width,int (*callback)(const int,const int),const char *text)
+static int widget_button(WINDOW *win,size_t *y,size_t *x,const size_t max_width,int (*callback)(const int),const char *text)
 { // Draw a button
 	const int w = widget_new(WIDGET_CHECKBOX,max_width);
 	widget[w].callback = callback;
@@ -618,7 +618,7 @@ static int widget_button(WINDOW *win,size_t *y,size_t *x,const size_t max_width,
 	return w;
 }
 
-static int widget_checkbox(WINDOW *win,size_t *y,size_t *x,const size_t max_width,int (*callback)(const int,const int),const uint8_t reversed,const char *text,const uint8_t ticked)
+static int widget_checkbox(WINDOW *win,size_t *y,size_t *x,const size_t max_width,int (*callback)(const int),const uint8_t reversed,const char *text,const uint8_t ticked)
 { // Draw a checkbox button
 	const size_t text_len = text ? strlen(text) : 0;
 	char array[text_len + 4 + 1];
@@ -631,7 +631,7 @@ static int widget_checkbox(WINDOW *win,size_t *y,size_t *x,const size_t max_widt
 	return w;
 }
 
-static int widget_text(WINDOW *win,size_t *y,size_t *x,const size_t max_height,const size_t max_width,int (*callback)(const int,const int),const int type,char **text_p,size_t *cursor_pos)
+static int widget_text(WINDOW *win,size_t *y,size_t *x,const size_t max_height,const size_t max_width,int (*callback)(const int),const int type,char **text_p,size_t *cursor_pos)
 { // Draw a text entry. Single-line SHOULD highlight when selected. Multi-line should NOT highlight when selected.
 	if(type != WIDGET_PASSWORD && type != WIDGET_INPUT_SINGLE_LINE && type != WIDGET_INPUT_MULTI_LINE && type != WIDGET_OUTPUT_MULTI_LINE && type != WIDGET_INPUT_NUMERICAL)
 	{
@@ -703,17 +703,14 @@ static void notify(const char *heading, const char *message)
 	beep();
 }
 
-static int callback_password(const int w,const int ch)
+static int callback_password(const int w)
 {
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
+	const uint8_t lockout_local = threadsafe_read_uint8(&mutex_global_variable,&lockout);
+	if(!lockout_local)
 	{
-		const uint8_t lockout_local = threadsafe_read_uint8(&mutex_global_variable,&lockout);
-		if(!lockout_local)
-		{
-			login_start(*widget[w].text);
-			torx_free((void*)&*widget[w].text);
-			*widget[w].cursor = 0; // must reset when freeing password
-		}
+		login_start(*widget[w].text);
+		torx_free((void*)&*widget[w].text);
+		*widget[w].cursor = 0; // must reset when freeing password
 	}
 	else
 		return 0; // Do not rebuild
@@ -863,7 +860,7 @@ static void go_back(void)
 		error_printf(0,"No window to navigate to. Possible coding error.");
 }
 
-static int keypress(const int w,const int ch)
+static int keypress(const int w, const int ch)
 {
 	if(w < 0 || w >= (int)(torx_allocation_len(widget) / sizeof(struct widget)))
 	{ // XXX Due to zero indexing, it will likely show "10 of 10" which is indeed an error.
@@ -879,7 +876,7 @@ static int keypress(const int w,const int ch)
 		*current_focus = (*current_focus + 1) % (int)(torx_allocation_len(widget) / sizeof(struct widget));
 		return 1; // Rebuild
 	}
-	else if((ch == KEY_PPAGE || ch == KEY_NPAGE) && (widget[w].type == WIDGET_INPUT_MULTI_LINE || widget[w].type == WIDGET_OUTPUT_MULTI_LINE) && 1 + print_wrapped(NULL, NULL, NULL, widget[w].max_width, *widget[w].text, torx_allocation_len(*widget[w].text)-1) >= max_height)
+	else if((ch == KEY_PPAGE || ch == KEY_NPAGE || ch == KEY_END) && (widget[w].type == WIDGET_INPUT_MULTI_LINE || widget[w].type == WIDGET_OUTPUT_MULTI_LINE) && 1 + print_wrapped(NULL, NULL, NULL, widget[w].max_width, *widget[w].text, torx_allocation_len(*widget[w].text) - 1) >= max_height)
 	{ // PgUp / PgDwn (NOTE: Not just handled here)
 		if(ch == KEY_PPAGE)
 		{
@@ -887,14 +884,40 @@ static int keypress(const int w,const int ch)
 				if(!move_cursor_up(w))
 					break;
 		}
-		else // if(ch == KEY_NPAGE)
+		else if(ch == KEY_NPAGE)
 		{
 			for(size_t count = 0; count < max_height; count++)
 				if(!move_cursor_down(w))
 					break;
 		}
+		else // if(ch == KEY_END)
+			*widget[w].cursor = torx_allocation_len(*widget[w].text) - 1;
 		return 1;
 	}
+	else if(window_chat && ch == KEY_PPAGE && !chat_scroll_max)
+	{ // PgUp
+		chat_scroll_lines += chat_scroll_jump;
+		return 1;
+	}
+	else if(window_chat && ch == KEY_NPAGE && chat_scroll_lines > 0)
+	{ // PgDn
+		if(chat_scroll_lines > chat_scroll_jump)
+			chat_scroll_lines -= chat_scroll_jump;
+		else
+			chat_scroll_lines = 0;
+		return 1;
+	}
+	else if(window_chat && ch == KEY_END)
+	{
+		chat_scroll_lines = 0;
+		return 1;
+	}
+	else if(ch == KEY_END)
+	{ // Targets single lines entries. Must go AFTER prior usage in window_chat and MULTI_LINE.
+		*widget[w].cursor = torx_allocation_len(*widget[w].text) - 1;
+		return 1;
+	}
+	// TODO If not too difficult, scroll widgets HERE. Have some KEY_PPAGE KEY_NPAGE KEY_END usages here that act upon current_scroll and current_scroll_offset. Scrolling DOWN may be harder because we cannot predict how many widgets we can scroll.
 	else if(ch == KEY_UP)
 	{
 		if(widget[w].type == WIDGET_INPUT_MULTI_LINE || widget[w].type == WIDGET_OUTPUT_MULTI_LINE)
@@ -982,7 +1005,9 @@ static int keypress(const int w,const int ch)
 			return 1; // Rebuild
 		}
 	}
-	else if(widget[w].callback && (ret = widget[w].callback(w,ch)))
+	else if(widget[w].callback
+	&& (ch == '\n' || ch == KEY_ENTER || ch =='\r' || (ch == ' ' && !(widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE)))
+	&& (ret = widget[w].callback(w)))
 		return ret;
 	else if(widget[w].type == WIDGET_INPUT_MULTI_LINE && (ch == '\n' || ch == KEY_ENTER || ch =='\r'))
 	{ // Append newline to WIDGET_INPUT_MULTI_LINE
@@ -992,34 +1017,23 @@ static int keypress(const int w,const int ch)
 	return 0; // Do not rebuild
 }
 
-static int callback_censored_region(const int w,const int ch)
+static int callback_censored_region(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		uint8_t censored_region_local = threadsafe_read_uint8(&mutex_global_variable,&censored_region);
-		censored_region_local = !censored_region_local;
-		threadsafe_write(&mutex_global_variable,&censored_region,&censored_region_local,sizeof(censored_region_local));
-		if(censored_region_local == 1)
-			sql_setting(1,-1,"censored_region","1",1);
-		else
-			sql_setting(1,-1,"censored_region","0",1);
-	/*	char array[2]; // Alternative is to make an array and use snprintf, like this
-		snprintf(array,sizeof(array),"%u",censored_region_local);
-		sql_setting(1,-1,"censored_region",array,1);	*/
-	}
+	uint8_t censored_region_local = threadsafe_read_uint8(&mutex_global_variable,&censored_region);
+	censored_region_local = !censored_region_local;
+	threadsafe_write(&mutex_global_variable,&censored_region,&censored_region_local,sizeof(censored_region_local));
+	if(censored_region_local == 1)
+		sql_setting(1,-1,"censored_region","1",1);
 	else
-		return 0; // Do not rebuild
+		sql_setting(1,-1,"censored_region","0",1);
 	return 1; // Rebuild
 }
 
-static int callback_pw_show(const int w,const int ch)
+static int callback_pw_show(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-		pw_show = !pw_show;
-	else
-		return 0; // Do not rebuild
+	pw_show = !pw_show;
 	return 1; // Rebuild
 }
 
@@ -1460,368 +1474,253 @@ after each comes online and receives the code.";
 	}
 }
 
-static int callback_theme(const int w,const int ch)
+static int callback_theme(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		global_theme = !global_theme;
-		toggle_highlight(window_settings);
-		char p1[21];
-		snprintf(p1,sizeof(p1),"%d",global_theme);
-		sql_setting(1,-1,"theme",p1,strlen(p1));
-	}
-	else
-		return 0; // Do not rebuild
+	global_theme = !global_theme;
+	toggle_highlight(window_settings);
+	char p1[21];
+	const size_t len = (size_t)snprintf(p1,sizeof(p1),"%d",global_theme);
+	sql_setting(1,-1,"theme",p1,len);
 	return 1; // Rebuild
 }
 
-static int callback_language(const int w,const int ch)
+static int callback_language(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		int iter = 0;
-		while(language[0] != '\0' && languages_available_code[iter] != NULL && strncmp(language,languages_available_code[iter],5))
-			iter++;
-		if(languages_available_code[iter] == NULL || languages_available_code[iter + 1] == NULL)
-			iter = 0; // reset to first
-		else
-			iter++;
-		const size_t len = (size_t)snprintf(language,sizeof(language),"%s",languages_available_code[iter]);
-		sql_setting(1,-1,"language",language,len);
-		ui_initialize_language();
-	}
+	int iter = 0;
+	while(language[0] != '\0' && languages_available_code[iter] != NULL && strncmp(language,languages_available_code[iter],5))
+		iter++;
+	if(languages_available_code[iter] == NULL || languages_available_code[iter + 1] == NULL)
+		iter = 0; // reset to first
 	else
-		return 0; // Do not rebuild
+		iter++;
+	const size_t len = (size_t)snprintf(language,sizeof(language),"%s",languages_available_code[iter]);
+	sql_setting(1,-1,"language",language,len);
+	ui_initialize_language();
 	return 1; // Rebuild
 }
 
-static int callback_onionid_or_torxid(const int w,const int ch)
+static int callback_onionid_or_torxid(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		const uint8_t toggled = !threadsafe_read_uint8(&mutex_global_variable,&shorten_torxids);
-		threadsafe_write(&mutex_global_variable,&shorten_torxids,&toggled,sizeof(toggled));
-		char p1[21];
-		const size_t len = (size_t)snprintf(p1,sizeof(p1),"%u",toggled);
-		sql_setting(0,-1,"shorten_torxids",p1,len);
-	}
-	else
-		return 0; // Do not rebuild
+	const uint8_t toggled = !threadsafe_read_uint8(&mutex_global_variable,&shorten_torxids);
+	threadsafe_write(&mutex_global_variable,&shorten_torxids,&toggled,sizeof(toggled));
+	char p1[21];
+	const size_t len = (size_t)snprintf(p1,sizeof(p1),"%u",toggled);
+	sql_setting(0,-1,"shorten_torxids",p1,len);
 	return 1; // Rebuild
 }
 
-static int callback_global_log_messages(const int w,const int ch)
+static int callback_global_log_messages(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		const uint8_t toggled = !threadsafe_read_uint8(&mutex_global_variable,&global_log_messages);
-		threadsafe_write(&mutex_global_variable,&global_log_messages,&toggled,sizeof(toggled));
-		char p1[21];
-		const size_t len = (size_t)snprintf(p1,sizeof(p1),"%u",toggled);
-		sql_setting(0,-1,"global_log_messages",p1,len);
-	}
-	else
-		return 0; // Do not rebuild
+	const uint8_t toggled = !threadsafe_read_uint8(&mutex_global_variable,&global_log_messages);
+	threadsafe_write(&mutex_global_variable,&global_log_messages,&toggled,sizeof(toggled));
+	char p1[21];
+	const size_t len = (size_t)snprintf(p1,sizeof(p1),"%u",toggled);
+	sql_setting(0,-1,"global_log_messages",p1,len);
 	return 1; // Rebuild
 }
 
-static int callback_tor_location(const int w,const int ch)
+static int callback_tor_location(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
+	if(tmp_tor_location)
 	{
-		if(tmp_tor_location)
-		{
-			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-			torx_free((void*)&tor_location);
-			tor_location = torx_copy(tmp_tor_location);
-			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			sql_setting(1,-1,"tor_location",tmp_tor_location,torx_allocation_len(tmp_tor_location)-1);
-			start_tor();
-		}
-	}
-	else
-		return 0; // Do not rebuild
-	return 1; // Rebuild
-}
-
-static int callback_snowflake_location(const int w,const int ch)
-{
-	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
-	{
-		if(tmp_snowflake_location)
-		{
-			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-			torx_free((void*)&snowflake_location);
-			snowflake_location = torx_copy(tmp_snowflake_location);
-			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			sql_setting(1,-1,"snowflake_location",tmp_snowflake_location,torx_allocation_len(tmp_snowflake_location)-1);
-			start_tor();
-		}
-	}
-	else
-		return 0; // Do not rebuild
-	return 1; // Rebuild
-}
-
-static int callback_lyrebird_location(const int w,const int ch)
-{
-	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
-	{
-		if(tmp_lyrebird_location)
-		{
-			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-			torx_free((void*)&lyrebird_location);
-			lyrebird_location = torx_copy(tmp_lyrebird_location);
-			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			sql_setting(1,-1,"lyrebird_location",tmp_lyrebird_location,torx_allocation_len(tmp_lyrebird_location)-1);
-			start_tor();
-		}
-	}
-	else
-		return 0; // Do not rebuild
-	return 1; // Rebuild
-}
-
-static int callback_conjure_location(const int w,const int ch)
-{
-	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
-	{
-		if(tmp_conjure_location)
-		{
-			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-			torx_free((void*)&conjure_location);
-			conjure_location = torx_copy(tmp_conjure_location);
-			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			sql_setting(1,-1,"conjure_location",tmp_conjure_location,torx_allocation_len(tmp_conjure_location)-1);
-			start_tor();
-		}
-	}
-	else
-		return 0; // Do not rebuild
-	return 1; // Rebuild
-}
-
-static int callback_threads(const int w,const int ch)
-{
-	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
-	{
-		if(tmp_threads_max)
-		{
-			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-			threads_max = (uint32_t)atoll(tmp_threads_max);
-			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			sql_setting(0,-1,"threads_max",tmp_threads_max,torx_allocation_len(tmp_threads_max)-1);
-		}
-	}
-	else
-		return 0; // Do not rebuild
-	return 1; // Rebuild
-}
-
-static int callback_suffix(const int w,const int ch)
-{
-	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
-	{
-		if(tmp_suffix_length)
-		{
-			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-			suffix_length = (uint8_t)atoll(tmp_suffix_length);
-			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			sql_setting(0,-1,"suffix_length",tmp_suffix_length,torx_allocation_len(tmp_suffix_length)-1);
-		}
-	}
-	else
-		return 0; // Do not rebuild
-	return 1; // Rebuild
-}
-
-static int callback_sing_days(const int w,const int ch)
-{
-	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
-	{
-		if(tmp_sing_expiration_days)
-		{
-			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-			sing_expiration_days = (uint32_t)atoll(tmp_sing_expiration_days);
-			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			sql_setting(0,-1,"sing_expiration_days",tmp_sing_expiration_days,torx_allocation_len(tmp_sing_expiration_days)-1);
-		}
-	}
-	else
-		return 0; // Do not rebuild
-	return 1; // Rebuild
-}
-
-static int callback_mult_dats(const int w,const int ch)
-{
-	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
-	{
-		if(tmp_mult_expiration_days)
-		{
-			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-			mult_expiration_days = (uint32_t)atoll(tmp_mult_expiration_days);
-			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			sql_setting(0,-1,"mult_expiration_days",tmp_mult_expiration_days,torx_allocation_len(tmp_mult_expiration_days)-1);
-		}
-	}
-	else
-		return 0; // Do not rebuild
-	return 1; // Rebuild
-}
-
-static int callback_auto_mult(const int w,const int ch)
-{
-	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
-	{
-		if(tmp_auto_accept_mult)
-		{
-			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-			auto_accept_mult = (uint8_t)atoll(tmp_auto_accept_mult);
-			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			sql_setting(0,-1,"auto_accept_mult",tmp_auto_accept_mult,torx_allocation_len(tmp_auto_accept_mult)-1);
-		}
-
-
-		const uint8_t toggled = !threadsafe_read_uint8(&mutex_global_variable,&auto_accept_mult);
-		threadsafe_write(&mutex_global_variable,&auto_accept_mult,&toggled,sizeof(toggled));
-		char p1[21];
-		const size_t len = (size_t)snprintf(p1,sizeof(p1),"%u",toggled);
-		sql_setting(0,-1,"auto_accept_mult",p1,len);
-	}
-	else
-		return 0; // Do not rebuild
-	return 1; // Rebuild
-}
-
-static int callback_socks_port(const int w,const int ch)
-{
-	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
-	{
-		if(tmp_tor_socks_port)
-		{
-			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-			tor_socks_port = (uint16_t)atoll(tmp_tor_socks_port);
-			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			sql_setting(0,-1,"tor_socks_port",tmp_tor_socks_port,torx_allocation_len(tmp_tor_socks_port)-1);
-		}
-	}
-	else
-		return 0; // Do not rebuild
-	return 1; // Rebuild
-}
-
-static int callback_ctrl_port(const int w,const int ch)
-{
-	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
-	{
-		if(tmp_tor_ctrl_port)
-		{
-			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-			tor_ctrl_port = (uint16_t)atoll(tmp_tor_ctrl_port);
-			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			sql_setting(0,-1,"tor_ctrl_port",tmp_tor_ctrl_port,torx_allocation_len(tmp_tor_ctrl_port)-1);
-		}
-	}
-	else
-		return 0; // Do not rebuild
-	return 1; // Rebuild
-}
-
-static int callback_ctrl_pass(const int w,const int ch)
-{
-	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
-	{
-		const size_t new_len = tmp_control_password_clear ? torx_allocation_len(tmp_control_password_clear) - 1 : 0;
-		pthread_rwlock_rdlock(&mutex_global_variable); // 🟧
-		const size_t current_len = control_password_clear ? torx_allocation_len(control_password_clear) - 1 : 0;
-		uint8_t changed = 0;
-		if((new_len || current_len) && (current_len != new_len || strcmp(tmp_control_password_clear,control_password_clear)))
-			changed = 1;
+		pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
+		torx_free((void*)&tor_location);
+		tor_location = torx_copy(tmp_tor_location);
 		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-		if(changed)
-		{
-			pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-			torx_free((void*)&control_password_clear);
-			if(new_len)
-				control_password_clear = torx_copy(tmp_control_password_clear);
-			pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-			if(new_len)
-				sql_setting(0,-1,"control_password_clear",tmp_control_password_clear,new_len);
-			else
-				sql_delete_setting(0,-1,"control_password_clear");
-			start_tor();
-		}
+		sql_setting(1,-1,"tor_location",tmp_tor_location,torx_allocation_len(tmp_tor_location)-1);
+		start_tor();
 	}
 	else
 		return 0; // Do not rebuild
 	return 1; // Rebuild
 }
 
-static int callback_rename(const int w,const int ch)
-{
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
-	{
-		if(global_n > -1)
-			change_nick(global_n,*widget[w].text);
-		else if(treeview_n > -1)
-			change_nick(treeview_n,*widget[w].text);
-	}
-	else
-		return 0; // Do not rebuild
-	return 1; // Rebuild
-}
-
-static int callback_toggle_block(const int w,const int ch)
+static int callback_snowflake_location(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
+	if(tmp_snowflake_location)
 	{
-		if(global_n > -1)
-			block_peer(global_n);
-		else if(treeview_n > -1)
-			block_peer(treeview_n);
+		pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
+		torx_free((void*)&snowflake_location);
+		snowflake_location = torx_copy(tmp_snowflake_location);
+		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+		sql_setting(1,-1,"snowflake_location",tmp_snowflake_location,torx_allocation_len(tmp_snowflake_location)-1);
+		start_tor();
 	}
 	else
 		return 0; // Do not rebuild
 	return 1; // Rebuild
 }
 
-static int callback_peer_accept(const int w,const int ch)
+static int callback_lyrebird_location(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
+	if(tmp_lyrebird_location)
 	{
-		peer_accept(treeview_n);
-		go_back();
+		pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
+		torx_free((void*)&lyrebird_location);
+		lyrebird_location = torx_copy(tmp_lyrebird_location);
+		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+		sql_setting(1,-1,"lyrebird_location",tmp_lyrebird_location,torx_allocation_len(tmp_lyrebird_location)-1);
+		start_tor();
 	}
+	else
+		return 0; // Do not rebuild
+	return 1; // Rebuild
+}
+
+static int callback_conjure_location(const int w)
+{
+	(void)w;
+	if(tmp_conjure_location)
+	{
+		pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
+		torx_free((void*)&conjure_location);
+		conjure_location = torx_copy(tmp_conjure_location);
+		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+		sql_setting(1,-1,"conjure_location",tmp_conjure_location,torx_allocation_len(tmp_conjure_location)-1);
+		start_tor();
+	}
+	else
+		return 0; // Do not rebuild
+	return 1; // Rebuild
+}
+
+static int callback_threads(const int w)
+{
+	(void)w;
+	pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
+	threads_max = (uint32_t)atoll(tmp_threads_max);
+	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+	sql_setting(0,-1,"threads_max",tmp_threads_max,torx_allocation_len(tmp_threads_max)-1);
+	return 1; // Rebuild
+}
+
+static int callback_suffix(const int w)
+{
+	(void)w;
+	pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
+	suffix_length = (uint8_t)atoll(tmp_suffix_length);
+	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+	sql_setting(0,-1,"suffix_length",tmp_suffix_length,torx_allocation_len(tmp_suffix_length)-1);
+	return 1; // Rebuild
+}
+
+static int callback_sing_days(const int w)
+{
+	(void)w;
+	pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
+	sing_expiration_days = (uint32_t)atoll(tmp_sing_expiration_days);
+	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+	sql_setting(0,-1,"sing_expiration_days",tmp_sing_expiration_days,torx_allocation_len(tmp_sing_expiration_days)-1);
+	return 1; // Rebuild
+}
+
+static int callback_mult_dats(const int w)
+{
+	(void)w;
+	pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
+	mult_expiration_days = (uint32_t)atoll(tmp_mult_expiration_days);
+	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+	sql_setting(0,-1,"mult_expiration_days",tmp_mult_expiration_days,torx_allocation_len(tmp_mult_expiration_days)-1);
+	return 1; // Rebuild
+}
+
+static int callback_auto_mult(const int w)
+{
+	(void)w;
+	const uint8_t toggled = !threadsafe_read_uint8(&mutex_global_variable,&auto_accept_mult);
+	threadsafe_write(&mutex_global_variable,&auto_accept_mult,&toggled,sizeof(toggled));
+	char p1[21];
+	const size_t len = (size_t)snprintf(p1,sizeof(p1),"%u",toggled);
+	sql_setting(0,-1,"auto_accept_mult",p1,len);
+	return 1; // Rebuild
+}
+
+static int callback_socks_port(const int w)
+{
+	(void)w;
+	pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
+	tor_socks_port = (uint16_t)atoll(tmp_tor_socks_port);
+	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+	sql_setting(0,-1,"tor_socks_port",tmp_tor_socks_port,torx_allocation_len(tmp_tor_socks_port)-1);
+	return 1; // Rebuild
+}
+
+static int callback_ctrl_port(const int w)
+{
+	(void)w;
+	pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
+	tor_ctrl_port = (uint16_t)atoll(tmp_tor_ctrl_port);
+	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+	sql_setting(0,-1,"tor_ctrl_port",tmp_tor_ctrl_port,torx_allocation_len(tmp_tor_ctrl_port)-1);
+	return 1; // Rebuild
+}
+
+static int callback_ctrl_pass(const int w)
+{
+	(void)w;
+	const size_t new_len = tmp_control_password_clear ? torx_allocation_len(tmp_control_password_clear) - 1 : 0;
+	pthread_rwlock_rdlock(&mutex_global_variable); // 🟧
+	const size_t current_len = control_password_clear ? torx_allocation_len(control_password_clear) - 1 : 0;
+	uint8_t changed = 0;
+	if((new_len || current_len) && (current_len != new_len || strcmp(tmp_control_password_clear,control_password_clear)))
+		changed = 1;
+	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+	if(changed)
+	{
+		pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
+		torx_free((void*)&control_password_clear);
+		if(new_len)
+			control_password_clear = torx_copy(tmp_control_password_clear);
+		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+		if(new_len)
+			sql_setting(0,-1,"control_password_clear",tmp_control_password_clear,new_len);
+		else
+			sql_delete_setting(0,-1,"control_password_clear");
+		start_tor();
+	}
+	return 1; // Rebuild
+}
+
+static int callback_rename(const int w)
+{
+	if(global_n > -1)
+		change_nick(global_n,*widget[w].text);
+	else if(treeview_n > -1)
+		change_nick(treeview_n,*widget[w].text);
+	return 1; // Rebuild
+}
+
+static int callback_toggle_block(const int w)
+{
+	(void)w;
+	if(global_n > -1)
+		block_peer(global_n);
+	else if(treeview_n > -1)
+		block_peer(treeview_n);
+	return 1; // Rebuild
+}
+
+static int callback_peer_accept(const int w)
+{
+	(void)w;
+	peer_accept(treeview_n);
+	go_back();
 	return 0; // Do not rebuild
 }
 
-static int callback_peer_delete(const int w,const int ch)
+static int callback_peer_delete(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		const int peer_index = getter_int(treeview_n,INT_MIN,-1,offsetof(struct peer_list,peer_index));
-		takedown_onion(peer_index,1);
-		go_back();
-	}
+	const int peer_index = getter_int(treeview_n,INT_MIN,-1,offsetof(struct peer_list,peer_index));
+	takedown_onion(peer_index,1);
+	go_back();
 	return 0; // Do not rebuild
 }
 
@@ -1880,7 +1779,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_tor,text_binary_location);
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), label_text, len);
-			*fyp += 1,*fxp = screen_cols - (tmp_tor_location ? strlen(tmp_tor_location) : 0) - 2;
+			*fyp += 1,*fxp = screen_cols - (tmp_tor_location ? torx_allocation_len(tmp_tor_location) - 1 : 0) - 2;
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_tor_location,WIDGET_INPUT_SINGLE_LINE,&tmp_tor_location,&tmp_tor_location_pos);
 		}
 		else if(item_to_draw == 5)
@@ -1888,7 +1787,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_snowflake,text_binary_location);
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), label_text, len);
-			*fyp += 1,*fxp = screen_cols - (tmp_snowflake_location ? strlen(tmp_snowflake_location) : 0) - 2;
+			*fyp += 1,*fxp = screen_cols - (tmp_snowflake_location ? torx_allocation_len(tmp_snowflake_location) - 1 : 0) - 2;
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_snowflake_location,WIDGET_INPUT_SINGLE_LINE,&tmp_snowflake_location,&tmp_snowflake_location_pos);
 		}
 		else if(item_to_draw == 6)
@@ -1896,7 +1795,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_lyrebird,text_binary_location);
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), label_text, len);
-			*fyp += 1,*fxp = screen_cols - (tmp_lyrebird_location ? strlen(tmp_lyrebird_location) : 0) - 2;
+			*fyp += 1,*fxp = screen_cols - (tmp_lyrebird_location ? torx_allocation_len(tmp_lyrebird_location) - 1 : 0) - 2;
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_lyrebird_location,WIDGET_INPUT_SINGLE_LINE,&tmp_lyrebird_location,&tmp_lyrebird_location_pos);
 		}
 		else if(item_to_draw == 7)
@@ -1904,35 +1803,35 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_conjure,text_binary_location);
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), label_text, len);
-			*fyp += 1,*fxp = screen_cols - (tmp_conjure_location ? strlen(tmp_conjure_location) : 0) - 2;
+			*fyp += 1,*fxp = screen_cols - (tmp_conjure_location ? torx_allocation_len(tmp_conjure_location) - 1 : 0) - 2;
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_conjure_location,WIDGET_INPUT_SINGLE_LINE,&tmp_conjure_location,&tmp_conjure_location_pos);
 		}
 		else if(item_to_draw == 8)
 		{ // Maximum CPU threads for TorX-ID generation
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_cpu, strlen(text_set_cpu));
-			*fyp += 1,*fxp = screen_cols - (tmp_threads_max ? strlen(tmp_threads_max) : 0) - 2;
+			*fyp += 1,*fxp = screen_cols - torx_allocation_len(tmp_threads_max) - 1 - 2;
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_threads,WIDGET_INPUT_NUMERICAL,&tmp_threads_max,&tmp_threads_max_pos);
 		}
 		else if(item_to_draw == 9)
 		{ // Minimum Suffix Length for TorX-ID generation
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_suffix, strlen(text_set_suffix));
-			*fyp += 1,*fxp = screen_cols - (tmp_suffix_length ? strlen(tmp_suffix_length) : 0) - 2;
+			*fyp += 1,*fxp = screen_cols - torx_allocation_len(tmp_suffix_length) - 1 - 2;
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_suffix,WIDGET_INPUT_NUMERICAL,&tmp_suffix_length,&tmp_suffix_length_pos);
 		}
 		else if(item_to_draw == 10)
 		{ // Single-Use TorX-ID expiration time (days)
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_validity_sing, strlen(text_set_validity_sing));
-			*fyp += 1,*fxp = screen_cols - (tmp_sing_expiration_days ? strlen(tmp_sing_expiration_days) : 0) - 2;
+			*fyp += 1,*fxp = screen_cols - torx_allocation_len(tmp_sing_expiration_days) - 1 - 2;
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_sing_days,WIDGET_INPUT_NUMERICAL,&tmp_sing_expiration_days,&tmp_sing_expiration_days_pos);
 		}
 		else if(item_to_draw == 11)
 		{ // Multiple-Use TorX-ID expiration time (days)
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_validity_mult, strlen(text_set_validity_mult));
-			*fyp += 1,*fxp = screen_cols - (tmp_mult_expiration_days ? strlen(tmp_mult_expiration_days) : 0) - 2;
+			*fyp += 1,*fxp = screen_cols - torx_allocation_len(tmp_mult_expiration_days) - 1 - 2;
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_mult_dats,WIDGET_INPUT_NUMERICAL,&tmp_mult_expiration_days,&tmp_mult_expiration_days_pos);
 		}
 		else if(item_to_draw == 12)
@@ -1950,25 +1849,26 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 		{ // Tor SOCKS5 Port
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_tor_port_socks, strlen(text_set_tor_port_socks));
-			*fyp += 1,*fxp = screen_cols - (tmp_tor_socks_port ? strlen(tmp_tor_socks_port) : 0) - 2;
+			*fyp += 1,*fxp = screen_cols - torx_allocation_len(tmp_tor_socks_port) - 1 - 2;
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_socks_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_socks_port,&tmp_tor_socks_port_pos);
 		}
 		else if(item_to_draw == 14)
 		{ // Tor Control Port
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_tor_port_ctrl, strlen(text_set_tor_port_ctrl));
-			*fyp += 1,*fxp = screen_cols - (tmp_tor_ctrl_port ? strlen(tmp_tor_ctrl_port) : 0) - 2;
+			*fyp += 1,*fxp = screen_cols - torx_allocation_len(tmp_tor_ctrl_port) - 1 - 2;
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_ctrl_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_ctrl_port,&tmp_tor_ctrl_port_pos);
 		}
 		else if(item_to_draw == 15)
 		{ // Tor Control Password
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_tor_password, strlen(text_set_tor_password));
-			*fyp += 1,*fxp = screen_cols - (tmp_control_password_clear ? strlen(tmp_control_password_clear) : 0) - 2;
+			*fyp += 1,*fxp = screen_cols - (tmp_control_password_clear ? torx_allocation_len(tmp_control_password_clear) - 1 : 0) - 2;
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_ctrl_pass,WIDGET_INPUT_SINGLE_LINE,&tmp_control_password_clear,&tmp_control_password_clear_pos);
 		}
 		else
 			return 0; // Printed nothing
+		sodium_memzero(label_text,sizeof(label_text));
 	}
 	else if(win == window_requests_popover || win == window_ids_popover)
 	{ // utilizes treeview_n
@@ -1976,7 +1876,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 		{ // Rename text_entry
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_identifier, strlen(text_identifier));
-			*fyp += 1,*fxp = screen_cols - (tmp_rename ? strlen(tmp_rename) : 0) - 2;
+			*fyp += 1,*fxp = screen_cols - (tmp_rename ? torx_allocation_len(tmp_rename) - 1 : 0) - 2;
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_rename,WIDGET_INPUT_SINGLE_LINE,&tmp_rename,&tmp_rename_pos);
 		}
 		else if(item_to_draw == 1)
@@ -1999,6 +1899,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 			const size_t label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",window_requests_popover && !outgoing_mode ? text_reject : text_delete);
 			*fyp += 2, *fxp = align_right(label_len);
 			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_peer_delete,label);
+			sodium_memzero(label,sizeof(label));
 		}
 		else
 			return 0; // Printed nothing
@@ -2040,18 +1941,15 @@ static void draw_ids_popover(void)
 	widget_draw_cursor(win); // XXX Must do last
 }
 
-static int callback_popover(const int w,const int ch)
+static int callback_popover(const int w)
 { // utilizes treeview_n
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		tmp_rename = getter_string(treeview_n,INT_MIN,-1,offsetof(struct peer_list,peernick));
-		tmp_rename_pos = tmp_rename ? torx_allocation_len(tmp_rename) - 1 : 0;
-		if(window_ids)
-			draw_ids_popover();
-		else if(window_requests)
-			draw_requests_popover();
-	}
+	tmp_rename = getter_string(treeview_n,INT_MIN,-1,offsetof(struct peer_list,peernick));
+	tmp_rename_pos = tmp_rename ? torx_allocation_len(tmp_rename) - 1 : 0;
+	if(window_ids)
+		draw_ids_popover();
+	else if(window_requests)
+		draw_requests_popover();
 	return 0; // Do not rebuild
 }
 
@@ -2119,26 +2017,22 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 			mvwaddch(win, (int)screen_rows-1, (int)x, ACS_HLINE);
 }
 
-static int callback_torrc(const int w,const int ch)
+static int callback_torrc(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		torx_free((void*)&torrc_content_local);
-		torrc_pos = 0;
-		pthread_rwlock_rdlock(&mutex_global_variable); // 🟧
-		torrc_content_local = torx_copy(torrc_content);
-		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-		draw_torrc();
-	}
+	torx_free((void*)&torrc_content_local);
+	torrc_pos = 0;
+	pthread_rwlock_rdlock(&mutex_global_variable); // 🟧
+	torrc_content_local = torx_copy(torrc_content);
+	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+	draw_torrc();
 	return 0; // Do not rebuild
 }
 
-static int callback_change_password(const int w,const int ch)
+static int callback_change_password(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-		draw_change_password();
+	draw_change_password();
 	return 0; // Do not rebuild
 }
 
@@ -2179,30 +2073,22 @@ static void draw_settings(void)
 				[		]
 	 [ text_save_sing ]  	[ text_save_mult ]
 	*/
+	sodium_memzero(label,sizeof(label));
 	widget_draw_cursor(win); // XXX Must do last
 }
 
-static int callback_toggle_logs(const int w,const int ch)
+static int callback_toggle_logs(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		tor_log_mode = !tor_log_mode;
-		return 1; // Rebuild
-	}
-	return 0; // Do not rebuild
+	tor_log_mode = !tor_log_mode;
+	return 1; // Rebuild
 }
 
-static int callback_debug_level(const int w,const int ch)
+static int callback_debug_level(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
-	{
-		if(tmp_debug_level)
-			torx_debug_level((int8_t)atoi(tmp_debug_level));
-	}
-	else
-		return 0; // Do not rebuild
+	if(tmp_debug_level)
+		torx_debug_level((int8_t)atoi(tmp_debug_level));
 	return 1; // Rebuild
 }
 
@@ -2239,19 +2125,16 @@ static void draw_logs(void)
 	widget_draw_cursor(win); // XXX Must do last
 }
 
-static int callback_save_torrc(const int w,const int ch)
+static int callback_save_torrc(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
+	char *torrc_errors = torrc_verify(torrc_content_local);
+	if(torrc_errors == NULL)
+		torrc_save(torrc_content_local);
+	else
 	{
-		char *torrc_errors = torrc_verify(torrc_content_local);
-		if(torrc_errors == NULL)
-			torrc_save(torrc_content_local);
-		else
-		{
-			notify(text_override,torrc_errors); // TODO should give an option to override errors
-			torx_free((void*)&torrc_errors);
-		}
+		notify(text_override,torrc_errors); // TODO should give an option to override errors
+		torx_free((void*)&torrc_errors);
 	}
 	return 0; // Do not rebuild
 }
@@ -2279,11 +2162,10 @@ static void draw_torrc(void)
 	widget_draw_cursor(win); // XXX Must do last
 }
 
-static int callback_change_password_attempt(const int w,const int ch)
+static int callback_change_password_attempt(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-		change_password_start(password_old ? password_old : "",password_new ? password_new : "",password_verify ? password_verify : "");
+	change_password_start(password_old ? password_old : "",password_new ? password_new : "",password_verify ? password_verify : "");
 	return 0; // Do not rebuild
 }
 
@@ -2331,93 +2213,80 @@ static void draw_change_password(void)
 	widget_draw_cursor(win); // XXX Must do last
 }
 
-static int callback_toggle_group(const int w,const int ch)
+static int callback_toggle_group(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
+	torx_free((void*)&generate_input);
+	torx_free((void*)&generate_output);
+	torx_free((void*)&add_identifier);
+	torx_free((void*)&add_id);
+	group_mode = !group_mode;
+	return 1; // Rebuild
+}
+
+static int callback_attempt_connect(const int w)
+{
+	(void)w;
+	int ret = -1;
+	if(group_mode)
 	{
-		torx_free((void*)&generate_input);
-		torx_free((void*)&generate_output);
+		unsigned char id[GROUP_ID_SIZE]; // zero'd
+		if(b64_decode(id,sizeof(id),add_id) == GROUP_ID_SIZE)
+			ret = group_join(-1,id,add_identifier,NULL,NULL);
+		sodium_memzero(id,sizeof(id));
+	}
+	else
+		ret = peer_save(add_id,add_identifier);
+	if(ret > -1)
+	{ // Successfully saved a group or peer
 		torx_free((void*)&add_identifier);
 		torx_free((void*)&add_id);
-		group_mode = !group_mode;
+		add_identifier_cursor = 0;
+		add_id_cursor = 0;
 		return 1; // Rebuild
 	}
 	return 0; // Do not rebuild
 }
 
-static int callback_attempt_connect(const int w,const int ch)
+static int callback_generate_one(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		int ret = -1;
-		if(group_mode)
-		{
-			unsigned char id[GROUP_ID_SIZE]; // zero'd
-			if(b64_decode(id,sizeof(id),add_id) == GROUP_ID_SIZE)
-				ret = group_join(-1,id,add_identifier,NULL,NULL);
-			sodium_memzero(id,sizeof(id));
-		}
-		else
-			ret = peer_save(add_id,add_identifier);
-		if(ret > -1)
-		{ // Successfully saved a group or peer
-			torx_free((void*)&add_identifier);
-			torx_free((void*)&add_id);
-			add_identifier_cursor = 0;
-			add_id_cursor = 0;
-			return 1;
-		}
+	int g = -1;
+	if(group_mode) // generate invite-only
+		g = group_generate(1,generate_input);
+	else // generate sing
+		generate_onion(ENUM_OWNER_SING,NULL,generate_input);
+	torx_free((void*)&generate_input);
+	generate_input_cursor = 0;
+	if(g > -1)
+	{ // Immediate result available
+		const size_t len = strlen(text_successfully_created_group);
+		generate_output = torx_insecure_malloc(len+1);
+		snprintf(generate_output,len+1,"%s",text_successfully_created_group);
+		return 1; // Rebuild
 	}
 	return 0; // Do not rebuild
 }
 
-static int callback_generate_one(const int w,const int ch)
+static int callback_generate_two(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		int g = -1;
-		if(group_mode) // generate invite-only
-			g = group_generate(1,generate_input);
-		else // generate sing
-			generate_onion(ENUM_OWNER_SING,NULL,generate_input);
-		torx_free((void*)&generate_input);
-		generate_input_cursor = 0;
-		if(g > -1)
-		{ // Immediate result available
-			const size_t len = strlen(text_successfully_created_group);
-			generate_output = torx_insecure_malloc(len+1);
-			snprintf(generate_output,len+1,"%s",text_successfully_created_group);
-			return 1;
-		}
-	}
-	return 0; // Do not rebuild
-}
-
-static int callback_generate_two(const int w,const int ch)
-{
-	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		int g = -1;
-		if(group_mode) // generate public group
-			g = group_generate(0,generate_input);
-		else // generate mult
-			generate_onion(ENUM_OWNER_MULT,NULL,generate_input);
-		torx_free((void*)&generate_input);
-		generate_input_cursor = 0;
-		if(g > -1)
-		{ // Immediate result available
-			unsigned char id[GROUP_ID_SIZE]; // zero'd
-			pthread_rwlock_rdlock(&mutex_expand_group); // 🟧
-			memcpy(id,group[g].id,sizeof(id));
-			pthread_rwlock_unlock(&mutex_expand_group); // 🟩
-			generate_output = b64_encode(id,GROUP_ID_SIZE);
-			sodium_memzero(id,sizeof(id));
-			return 1;
-		}
+	int g = -1;
+	if(group_mode) // generate public group
+		g = group_generate(0,generate_input);
+	else // generate mult
+		generate_onion(ENUM_OWNER_MULT,NULL,generate_input);
+	torx_free((void*)&generate_input);
+	generate_input_cursor = 0;
+	if(g > -1)
+	{ // Immediate result available
+		unsigned char id[GROUP_ID_SIZE]; // zero'd
+		pthread_rwlock_rdlock(&mutex_expand_group); // 🟧
+		memcpy(id,group[g].id,sizeof(id));
+		pthread_rwlock_unlock(&mutex_expand_group); // 🟩
+		generate_output = b64_encode(id,GROUP_ID_SIZE);
+		sodium_memzero(id,sizeof(id));
+		return 1; // Rebuild
 	}
 	return 0; // Do not rebuild
 }
@@ -2485,7 +2354,7 @@ static void draw_generate(void)
 
 	if(generate_output)
 	{
-		label_len = strlen(generate_output);
+		label_len = torx_allocation_len(generate_output) - 1;
 		fy += 2, fx = align_center(label_len);
 		print_wrapped(win,&fy,&fx,screen_cols-(2*2),generate_output,label_len);
 	}
@@ -2494,14 +2363,11 @@ static void draw_generate(void)
 	widget_draw_cursor(win); // XXX Must do last
 }
 
-static int callback_emit_global_kill(const int w,const int ch)
+static int callback_emit_global_kill(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		kill_code(-1,NULL);
-		go_back();
-	}
+	kill_code(-1,NULL);
+	go_back();
 	return 0; // Do not rebuild
 }
 
@@ -2573,16 +2439,11 @@ static void draw_group_peerlist(void)
 	widget_draw_cursor(win); // XXX Must do last
 }
 
-static int callback_contacts_groups(const int w,const int ch)
+static int callback_contacts_groups(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		groups_mode = !groups_mode;
-		list_first_peer_w = -1;
-	}
-	else
-		return 0; // Do not rebuild
+	groups_mode = !groups_mode;
+	list_first_peer_w = -1;
 	return 1; // Rebuild
 }
 
@@ -2594,53 +2455,46 @@ static char *torx_itoa(const size_t value)
 	return allocation;
 }
 
-static int callback_settings(const int w,const int ch)
+static int callback_settings(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		pthread_rwlock_rdlock(&mutex_global_variable); // 🟧
-		tmp_snowflake_location = torx_copy(snowflake_location);
-		tmp_lyrebird_location = torx_copy(lyrebird_location);
-		tmp_conjure_location = torx_copy(conjure_location);
-		tmp_tor_location = torx_copy(tor_location);
-		tmp_threads_max = torx_itoa(threads_max);
-		tmp_suffix_length = torx_itoa(suffix_length);
-		tmp_sing_expiration_days = torx_itoa(sing_expiration_days);
-		tmp_mult_expiration_days = torx_itoa(mult_expiration_days);
-		tmp_auto_accept_mult = torx_itoa(auto_accept_mult);
-		tmp_tor_socks_port = torx_itoa(tor_socks_port);
-		tmp_tor_ctrl_port = torx_itoa(tor_ctrl_port);
-		tmp_control_password_clear = torx_copy(control_password_clear);
-		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+	pthread_rwlock_rdlock(&mutex_global_variable); // 🟧
+	tmp_snowflake_location = torx_copy(snowflake_location);
+	tmp_lyrebird_location = torx_copy(lyrebird_location);
+	tmp_conjure_location = torx_copy(conjure_location);
+	tmp_tor_location = torx_copy(tor_location);
+	tmp_threads_max = torx_itoa(threads_max);
+	tmp_suffix_length = torx_itoa(suffix_length);
+	tmp_sing_expiration_days = torx_itoa(sing_expiration_days);
+	tmp_mult_expiration_days = torx_itoa(mult_expiration_days);
+	tmp_auto_accept_mult = torx_itoa(auto_accept_mult);
+	tmp_tor_socks_port = torx_itoa(tor_socks_port);
+	tmp_tor_ctrl_port = torx_itoa(tor_ctrl_port);
+	tmp_control_password_clear = torx_copy(control_password_clear);
+	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
 
-		tmp_snowflake_location_pos = tmp_snowflake_location ? torx_allocation_len(tmp_snowflake_location) - 1 : 0;
-		tmp_lyrebird_location_pos = tmp_lyrebird_location ? torx_allocation_len(tmp_lyrebird_location) - 1 : 0;
-		tmp_conjure_location_pos = tmp_conjure_location ? torx_allocation_len(tmp_conjure_location) - 1 : 0;
-		tmp_tor_location_pos = tmp_tor_location ? torx_allocation_len(tmp_tor_location) - 1 : 0;
-		tmp_threads_max_pos = tmp_threads_max ? torx_allocation_len(tmp_threads_max) - 1 : 0;
-		tmp_suffix_length_pos = tmp_suffix_length ? torx_allocation_len(tmp_suffix_length) - 1 : 0;
-		tmp_sing_expiration_days_pos = tmp_sing_expiration_days ? torx_allocation_len(tmp_sing_expiration_days) - 1 : 0;
-		tmp_mult_expiration_days_pos = tmp_mult_expiration_days ? torx_allocation_len(tmp_mult_expiration_days) - 1 : 0;
-		tmp_auto_accept_mult_pos = tmp_auto_accept_mult ? torx_allocation_len(tmp_auto_accept_mult) - 1 : 0;
-		tmp_tor_socks_port_pos = tmp_tor_socks_port ? torx_allocation_len(tmp_tor_socks_port) - 1 : 0;
-		tmp_tor_ctrl_port_pos = tmp_tor_ctrl_port ? torx_allocation_len(tmp_tor_ctrl_port) - 1 : 0;
-		tmp_control_password_clear_pos = tmp_control_password_clear ? torx_allocation_len(tmp_control_password_clear) - 1 : 0;
+	tmp_snowflake_location_pos = tmp_snowflake_location ? torx_allocation_len(tmp_snowflake_location) - 1 : 0;
+	tmp_lyrebird_location_pos = tmp_lyrebird_location ? torx_allocation_len(tmp_lyrebird_location) - 1 : 0;
+	tmp_conjure_location_pos = tmp_conjure_location ? torx_allocation_len(tmp_conjure_location) - 1 : 0;
+	tmp_tor_location_pos = tmp_tor_location ? torx_allocation_len(tmp_tor_location) - 1 : 0;
+	tmp_threads_max_pos = torx_allocation_len(tmp_threads_max) - 1;
+	tmp_suffix_length_pos = torx_allocation_len(tmp_suffix_length) - 1;
+	tmp_sing_expiration_days_pos = torx_allocation_len(tmp_sing_expiration_days) - 1;
+	tmp_mult_expiration_days_pos = torx_allocation_len(tmp_mult_expiration_days) - 1;
+	tmp_auto_accept_mult_pos = torx_allocation_len(tmp_auto_accept_mult) - 1;
+	tmp_tor_socks_port_pos = torx_allocation_len(tmp_tor_socks_port) - 1;
+	tmp_tor_ctrl_port_pos = torx_allocation_len(tmp_tor_ctrl_port) - 1;
+	tmp_control_password_clear_pos = tmp_control_password_clear ? torx_allocation_len(tmp_control_password_clear) - 1 : 0;
 
-		draw_settings();
-	}
+	draw_settings();
 	return 0; // Do not rebuild
 }
 
-static int callback_toggle_requests(const int w,const int ch)
+static int callback_toggle_requests(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		outgoing_mode = !outgoing_mode;
-		return 1; // Rebuild
-	}
-	return 0; // Do not rebuild
+	outgoing_mode = !outgoing_mode;
+	return 1; // Rebuild
 }
 
 static void draw_requests(void)
@@ -2668,15 +2522,11 @@ static void draw_requests(void)
 	widget_draw_cursor(win); // XXX Must do last
 }
 
-static int callback_toggle_ids(const int w,const int ch)
+static int callback_toggle_ids(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		single_mode = !single_mode;
-		return 1; // Rebuild
-	}
-	return 0; // Do not rebuild
+	single_mode = !single_mode;
+	return 1; // Rebuild
 }
 
 static void draw_ids(void)
@@ -2704,92 +2554,78 @@ static void draw_ids(void)
 	widget_draw_cursor(win); // XXX Must do last
 }
 
-static int callback_logs(const int w,const int ch)
+static int callback_logs(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		tmp_debug_level = torx_itoa((size_t)torx_debug_level(-1));
-		tmp_debug_level_pos = tmp_debug_level ? torx_allocation_len(tmp_debug_level) - 1 : 0;
-		draw_logs();
-	}
+	tmp_debug_level = torx_itoa((size_t)torx_debug_level(-1));
+	tmp_debug_level_pos = tmp_debug_level ? torx_allocation_len(tmp_debug_level) - 1 : 0;
+	draw_logs();
 	return 0; // Do not rebuild
 }
 
-static int callback_generate(const int w,const int ch)
+static int callback_generate(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-		draw_generate();
+	draw_generate();
 	return 0; // Do not rebuild
 }
 
-static int callback_global_kill(const int w,const int ch)
+static int callback_global_kill(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-		draw_global_kill();
+	draw_global_kill();
 	return 0; // Do not rebuild
 }
 
-static int callback_chat_actions(const int w,const int ch)
+static int callback_chat_actions(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-		draw_chat_actions();
+	draw_chat_actions();
 	return 0; // Do not rebuild
 }
 
-static int callback_chat_settings(const int w,const int ch)
+static int callback_chat_settings(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-		draw_chat_settings();
+	draw_chat_settings();
 	return 0; // Do not rebuild
 }
 
-static int callback_group_invite(const int w,const int ch)
+static int callback_group_invite(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-		draw_group_invite();
+	draw_group_invite();
 	return 0; // Do not rebuild
 }
 
-static int callback_group_peerlist(const int w,const int ch)
+static int callback_group_peerlist(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-		draw_group_peerlist();
+	draw_group_peerlist();
 	return 0; // Do not rebuild
 }
 
-static int callback_peer(const int w,const int ch)
+static int callback_peer(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-	{
-		global_n = selected_n;
-		t_peer[global_n].unread = 0;
-		chat_scroll_lines = 0;
-		draw_chat();
-	}
+	global_n = selected_n;
+	t_peer[global_n].unread = 0;
+	chat_scroll_lines = 0;
+	draw_chat();
 	return 0; // Do not rebuild
 }
 
-static int callback_requests(const int w,const int ch)
+static int callback_requests(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-		draw_requests();
+	draw_requests();
 	return 0; // Do not rebuild
 }
 
-static int callback_ids(const int w,const int ch)
+static int callback_ids(const int w)
 {
 	(void)w;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r' || ch == ' ')
-		draw_ids();
+	draw_ids();
 	return 0; // Do not rebuild
 }
 
@@ -2949,49 +2785,33 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 	return lines;
 }
 
-static int callback_message_input(const int w,const int ch)
+static int callback_message_input(const int w)
 {
 	(void)w;
 	const int n = global_n;
-	if(ch == '\n' || ch == KEY_ENTER || ch =='\r')
-	{
-		const size_t unsent_len = torx_allocation_len(t_peer[n].unsent) ? torx_allocation_len(t_peer[n].unsent) - 1 : 0;
-		if(!unsent_len)
-			return 0; // ignore it
-		else if(t_peer[n].unsent_pos == unsent_len)
-		{ // send message
-			int g = -1;
-			uint8_t g_invite_required = 0;
-			const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-			if(owner == ENUM_OWNER_GROUP_CTRL)
-			{
-				g = set_g(n,NULL);
-				g_invite_required = getter_group_uint8(g,offsetof(struct group_list,invite_required));
-			}
-			if(owner == ENUM_OWNER_GROUP_CTRL && g_invite_required) // date && sign private group messages
-				message_send(n,ENUM_PROTOCOL_UTF8_TEXT_DATE_SIGNED,t_peer[n].unsent,torx_allocation_len(t_peer[n].unsent)-1);
-			else // regular messages, private messages (in authenticated pipes), public messages in public groups (in authenticated pipes)
-				message_send(n,ENUM_PROTOCOL_UTF8_TEXT,t_peer[n].unsent,torx_allocation_len(t_peer[n].unsent)-1);
-			torx_free((void*)&t_peer[n].unsent);
-			t_peer[n].unsent_pos = 0;
-			chat_scroll_lines = 0;
+	const size_t unsent_len = torx_allocation_len(t_peer[n].unsent) ? torx_allocation_len(t_peer[n].unsent) - 1 : 0;
+	if(!unsent_len)
+		return 1; // Ignore it, but trigger rebuild to prevent it from being appended.
+	else if(t_peer[n].unsent_pos == unsent_len)
+	{ // send message
+		int g = -1;
+		uint8_t g_invite_required = 0;
+		const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+		if(owner == ENUM_OWNER_GROUP_CTRL)
+		{
+			g = set_g(n,NULL);
+			g_invite_required = getter_group_uint8(g,offsetof(struct group_list,invite_required));
 		}
-		else
-			return 0; // insert newline at cursor
-	}
-	else if(ch == KEY_PPAGE && !chat_scroll_max) // PgUp
-		chat_scroll_lines += chat_scroll_jump;
-	else if(ch == KEY_NPAGE && chat_scroll_lines > 0)
-	{ // PgDn
-		if(chat_scroll_lines > chat_scroll_jump)
-			chat_scroll_lines -= chat_scroll_jump;
-		else
-			chat_scroll_lines = 0;
-	}
-	else if(ch == KEY_END)
+		if(owner == ENUM_OWNER_GROUP_CTRL && g_invite_required) // date && sign private group messages
+			message_send(n,ENUM_PROTOCOL_UTF8_TEXT_DATE_SIGNED,t_peer[n].unsent,torx_allocation_len(t_peer[n].unsent)-1);
+		else // regular messages, private messages (in authenticated pipes), public messages in public groups (in authenticated pipes)
+			message_send(n,ENUM_PROTOCOL_UTF8_TEXT,t_peer[n].unsent,torx_allocation_len(t_peer[n].unsent)-1);
+		torx_free((void*)&t_peer[n].unsent);
+		t_peer[n].unsent_pos = 0;
 		chat_scroll_lines = 0;
+	}
 	else
-		return 0; // Do not rebuild
+		return 0; // Insert newline at cursor
 	return 1; // Rebuild
 }
 
