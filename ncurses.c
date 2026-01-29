@@ -790,7 +790,25 @@ static inline void unset_predicting(void)
 	}
 }
 
-static void go_back(void)
+static WINDOW *window_prepare(void (*caller)(void),WINDOW **win_p,int *new_focus)
+{
+	widget_clear(new_focus); // XXX Must do first
+	window_current = win_p;
+	redraw = caller;
+	*win_p = newwin_size(screen_rows, screen_cols, 0, 0);
+	if(global_theme == LIGHT_THEME)
+	{
+		wattron(*win_p, A_REVERSE); // highlight on (do not use toggle_highlight here)
+		highlight_active = 1;
+		for(size_t y = 0; y < screen_rows; y++)
+			for(size_t x = 0; x < screen_cols; x++)
+				mvwaddch(*win_p, (int)y, (int)x, (chtype)' ');
+	}
+	box(*win_p,0,0); // Draw border
+	return *win_p;
+}
+
+static void go_back(size_t motions)
 { // Go back or exit, after cleaning up any heap allocs
 	if(current_scroll_offset)
 	{
@@ -799,78 +817,99 @@ static void go_back(void)
 		*current_focus = 0; // must reset neither or both of these
 		current_scroll_offset = NULL; // do after unset_predicting, in case we had a scrollable
 	}
-	if(window_login || window_contacts)
-		running = false;
-	else if(window_chat || window_requests || window_ids || window_settings || window_generate || window_logs || window_global_kill)
+	while(running && motions--)
 	{
-		if(window_chat)
-			global_n = -1;
-		else if(window_settings)
+		if(window_login || window_contacts)
+			running = false;
+		else if(window_chat || window_requests || window_ids || window_settings || window_generate || window_logs || window_global_kill)
 		{
-			torx_free((void*)&tmp_snowflake_location);
-			torx_free((void*)&tmp_lyrebird_location);
-			torx_free((void*)&tmp_conjure_location);
-			torx_free((void*)&tmp_tor_location);
-			torx_free((void*)&tmp_threads_max);
-			torx_free((void*)&tmp_suffix_length);
-			torx_free((void*)&tmp_sing_expiration_days);
-			torx_free((void*)&tmp_mult_expiration_days);
-			torx_free((void*)&tmp_auto_accept_mult);
-			torx_free((void*)&tmp_tor_socks_port);
-			torx_free((void*)&tmp_tor_ctrl_port);
-			torx_free((void*)&tmp_control_password_clear);
+			if(window_chat)
+				global_n = -1;
+			else if(window_settings)
+			{
+				torx_free((void*)&tmp_snowflake_location);
+				torx_free((void*)&tmp_lyrebird_location);
+				torx_free((void*)&tmp_conjure_location);
+				torx_free((void*)&tmp_tor_location);
+				torx_free((void*)&tmp_threads_max);
+				torx_free((void*)&tmp_suffix_length);
+				torx_free((void*)&tmp_sing_expiration_days);
+				torx_free((void*)&tmp_mult_expiration_days);
+				torx_free((void*)&tmp_auto_accept_mult);
+				torx_free((void*)&tmp_tor_socks_port);
+				torx_free((void*)&tmp_tor_ctrl_port);
+				torx_free((void*)&tmp_control_password_clear);
+			}
+			else if(window_generate)
+			{
+				torx_free((void*)&generate_input);
+				torx_free((void*)&generate_output);
+				torx_free((void*)&add_identifier);
+				torx_free((void*)&add_id);
+			}
+			else if(window_logs)
+				torx_free((void*)&tmp_debug_level);
+			if(motions < 2)
+				draw_contacts();
+			else // Must prepare prior to destruction
+				window_prepare(&draw_contacts,&window_contacts,&focus_contacts);
 		}
-		else if(window_generate)
+		else if(window_chat_actions || window_chat_settings || window_group_invite || window_group_peerlist)
 		{
-			torx_free((void*)&generate_input);
-			torx_free((void*)&generate_output);
-			torx_free((void*)&add_identifier);
-			torx_free((void*)&add_id);
+			if(motions < 2)
+				draw_chat();
+			else // Must prepare prior to destruction
+				window_prepare(&draw_chat,&window_chat,&focus_chat);
 		}
-		else if(window_logs)
-			torx_free((void*)&tmp_debug_level);
-		draw_contacts();
-	}
-	else if(window_chat_actions || window_chat_settings || window_group_invite || window_group_peerlist)
-		draw_chat();
-	else if(window_torrc || window_change_password)
-	{
-		if(window_torrc)
-			torx_free((void*)&torrc_content_local);
-		else if(window_change_password)
+		else if(window_torrc || window_change_password)
 		{
-			torx_free((void*)&password);
-			torx_free((void*)&password_old);
-			torx_free((void*)&password_new);
-			torx_free((void*)&password_verify);
+			if(window_torrc)
+				torx_free((void*)&torrc_content_local);
+			else if(window_change_password)
+			{
+				torx_free((void*)&password);
+				torx_free((void*)&password_old);
+				torx_free((void*)&password_new);
+				torx_free((void*)&password_verify);
+			}
+			if(motions < 2)
+				draw_settings();
+			else // Must prepare prior to destruction
+				window_prepare(&draw_settings,&window_settings,&focus_settings);
 		}
-		draw_settings();
+		else if(window_requests_popover)
+		{
+			torx_free((void*)&tmp_rename);
+			if(motions < 2)
+				draw_requests();
+			else // Must prepare prior to destruction
+				window_prepare(&draw_requests_popover,&window_requests_popover,&focus_popover);
+		}
+		else if(window_ids_popover)
+		{
+			torx_free((void*)&tmp_rename);
+			if(motions < 2)
+				draw_ids();
+			else // Must prepare prior to destruction
+				window_prepare(&draw_ids_popover,&window_ids_popover,&focus_popover);
+		}
+		else
+			error_printf(0,"No window to navigate to. Possible coding error.");
 	}
-	else if(window_requests_popover)
-	{
-		torx_free((void*)&tmp_rename);
-		draw_requests();
-	}
-	else if(window_ids_popover)
-	{
-		torx_free((void*)&tmp_rename);
-		draw_ids();
-	}
-	else
-		error_printf(0,"No window to navigate to. Possible coding error.");
 }
 
 static int keypress(const int w, const int ch)
 {
 	if(w < 0 || w >= (int)(torx_allocation_len(widget) / sizeof(struct widget)))
 	{ // XXX Due to zero indexing, it will likely show "10 of 10" which is indeed an error.
-		error_printf(0,"Keypress called on possibly invalid widget: %lu of %lu",w,torx_allocation_len(widget) / sizeof(struct widget));
+		if(w > 0)
+			error_printf(0,"Keypress called on possibly invalid widget: %lu of %lu",w,torx_allocation_len(widget) / sizeof(struct widget));
+		go_back(1);
 		return 0; // Sanity check
 	}
 	const size_t max_height = screen_rows - 3; // TODO this should be specific to each page
-	int ret;
 	if(ch == KEY_ESC || ch == KEY_HOME)
-		go_back();
+		go_back(1);
 	else if(ch == '\t' || ch == KEY_BTAB)
 	{
 		*current_focus = (*current_focus + 1) % (int)(torx_allocation_len(widget) / sizeof(struct widget));
@@ -1005,15 +1044,13 @@ static int keypress(const int w, const int ch)
 			return 1; // Rebuild
 		}
 	}
-	else if(widget[w].callback
-	&& (ch == '\n' || ch == KEY_ENTER || ch =='\r' || (ch == ' ' && !(widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE)))
-	&& (ret = widget[w].callback(w)))
-		return ret;
 	else if(widget[w].type == WIDGET_INPUT_MULTI_LINE && (ch == '\n' || ch == KEY_ENTER || ch =='\r'))
 	{ // Append newline to WIDGET_INPUT_MULTI_LINE
 		append_character_at_cursor(w,'\n');
 		return 1; // Rebuild
 	}
+	else if(widget[w].callback && (ch == '\n' || ch == KEY_ENTER || ch =='\r' || (ch == ' ' && (!widget[w].cursor || !widget[w].text || widget[w].type == WIDGET_OUTPUT_MULTI_LINE))))
+		return widget[w].callback(w); // XXX MUST BE LAST because if this contains a draw_, it will free widget
 	return 0; // Do not rebuild
 }
 
@@ -1035,24 +1072,6 @@ static int callback_pw_show(const int w)
 	(void)w;
 	pw_show = !pw_show;
 	return 1; // Rebuild
-}
-
-static WINDOW *window_prepare(void (*caller)(void),WINDOW **win_p,int *new_focus)
-{
-	widget_clear(new_focus); // XXX Must do first
-	window_current = win_p;
-	redraw = caller;
-	*win_p = newwin_size(screen_rows, screen_cols, 0, 0);
-	if(global_theme == LIGHT_THEME)
-	{
-		wattron(*win_p, A_REVERSE); // highlight on (do not use toggle_highlight here)
-		highlight_active = 1;
-		for(size_t y = 0; y < screen_rows; y++)
-			for(size_t x = 0; x < screen_cols; x++)
-				mvwaddch(*win_p, (int)y, (int)x, (chtype)' ');
-	}
-	box(*win_p,0,0); // Draw border
-	return *win_p;
 }
 
 static void draw_login(void)
@@ -1711,7 +1730,7 @@ static int callback_peer_accept(const int w)
 {
 	(void)w;
 	peer_accept(treeview_n);
-	go_back();
+	go_back(1);
 	return 0; // Do not rebuild
 }
 
@@ -1720,7 +1739,7 @@ static int callback_peer_delete(const int w)
 	(void)w;
 	const int peer_index = getter_int(treeview_n,INT_MIN,-1,offsetof(struct peer_list,peer_index));
 	takedown_onion(peer_index,1);
-	go_back();
+	go_back(1);
 	return 0; // Do not rebuild
 }
 
@@ -2367,7 +2386,7 @@ static int callback_emit_global_kill(const int w)
 {
 	(void)w;
 	kill_code(-1,NULL);
-	go_back();
+	go_back(1);
 	return 0; // Do not rebuild
 }
 
@@ -2400,10 +2419,88 @@ static void draw_chat_actions(void)
 	WINDOW *win = window_prepare(&draw_chat_actions,&window_chat_actions,&focus_chat_actions); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
+	size_t fy = 0,fx = 2;
+	// Draw top line widgets
+	wattron(win,A_BOLD); // bold on
+	mvwprintw_size(win,fy,fx,"%s",text_actions); // do not wrap
+	wattroff(win,A_BOLD); // bold off
 
+// This should be nearly blank, as we have no gifs, file transfers, etc
+//	Change Identifier
+// if(owner == ENUM_OWNER_GROUP_CTRL
 
+// if(owner == ENUM_OWNER_GROUP_CTRL && Private Group)
+//	[ Invite Peer ]
+// if(owner == ENUM_OWNER_GROUP_CTRL && Public Group)
+//	( Shows GroupID)
+// EMOJI MENU ???? NO. Would be overly complicated, require settings to save frequently saved emojis. Future feature, perhaps.
 
 	widget_draw_cursor(win); // XXX Must do last
+}
+
+static int callback_chat_logging(const int w)
+{
+	(void)w;
+	const int peer_index = getter_int(global_n,INT_MIN,-1,offsetof(struct peer_list,peer_index));
+	int8_t log_messages = getter_int8(global_n,INT_MIN,-1,offsetof(struct peer_list,log_messages));
+	// Update Setting
+	if(log_messages == -1 || log_messages == 0)
+	{
+		log_messages++;
+		setter(global_n,INT_MIN,-1,offsetof(struct peer_list,log_messages),&log_messages,sizeof(log_messages));
+	}
+	else if(log_messages == 1)
+	{
+		log_messages = -1;
+		setter(global_n,INT_MIN,-1,offsetof(struct peer_list,log_messages),&log_messages,sizeof(log_messages));
+	}
+	// Save Setting
+	char p1[21];
+	snprintf(p1,sizeof(p1),"%d",log_messages);
+	sql_setting(0,peer_index,"logging",p1,strlen(p1));
+	return 1; // Rebuild
+}
+
+static int callback_chat_notifications(const int w)
+{
+	(void)w;
+	t_peer[global_n].mute = !t_peer[global_n].mute;
+	const int peer_index = getter_int(global_n,INT_MIN,-1,offsetof(struct peer_list,peer_index));
+	char p1[21];
+	snprintf(p1,sizeof(p1),"%d",t_peer[global_n].mute);
+	sql_setting(0,peer_index,"mute",p1,strlen(p1));
+	return 1; // Rebuild
+}
+
+static int callback_chat_block(const int w)
+{
+	(void)w;
+	block_peer(global_n);
+	return 1; // Rebuild
+}
+
+static int callback_chat_kill(const int w)
+{
+	(void)w;
+	kill_code(global_n,NULL);
+	go_back(2);
+	return 0; // Do not rebuild
+}
+
+static int callback_chat_delete(const int w)
+{
+	(void)w;
+	const int peer_index = getter_int(global_n,INT_MIN,-1,offsetof(struct peer_list,peer_index));
+	takedown_onion(peer_index,1);
+	go_back(2);
+	return 0; // Do not rebuild
+}
+
+static int callback_chat_clear(const int w)
+{
+	(void)w;
+	delete_log(global_n);
+	return 1; // Rebuild
 }
 
 static void draw_chat_settings(void)
@@ -2411,8 +2508,58 @@ static void draw_chat_settings(void)
 	WINDOW *win = window_prepare(&draw_chat_settings,&window_chat_settings,&focus_chat_settings); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
+	size_t fy = 0,fx = 2;
+	// Draw top line widgets
+	wattron(win,A_BOLD); // bold on
+	mvwprintw_size(win,fy,fx,"%s",text_settings); // do not wrap
+	wattroff(win,A_BOLD); // bold off
 
+	const char *selected;
 
+//	[ Logging ]
+	const int8_t log_messages = getter_int8(global_n,INT_MIN,-1,offsetof(struct peer_list,log_messages));
+	if(log_messages == -1)
+		selected = text_tooltip_logging_disabled;
+	else if(log_messages == 0)
+	{
+		if(threadsafe_read_uint8(&mutex_global_variable,&global_log_messages) == 1)
+			selected = text_tooltip_logging_global_on;
+		else
+			selected = text_tooltip_logging_global_off;
+	}
+	else if(log_messages == 1)
+		selected = text_tooltip_logging_enabled;
+	fy += 2, fx = 2;
+	widget_button(win,&fy,&fx,screen_cols-(fx*2),callback_chat_logging,selected);
+
+//	[ Notifications ]
+	if(t_peer[global_n].mute == 1)
+		selected = text_tooltip_notifications_off;
+	else
+		selected = text_tooltip_notifications_on;
+	fy += 2, fx = 2;
+	widget_button(win,&fy,&fx,screen_cols-(fx*2),callback_chat_notifications,selected);
+
+//	[ Block ]
+	const uint8_t status = getter_uint8(global_n,INT_MIN,-1,offsetof(struct peer_list,status));
+	if(status == ENUM_STATUS_BLOCKED)
+		selected = text_tooltip_blocked_on;
+	else
+		selected = text_tooltip_blocked_off;
+	fy += 2, fx = 2;
+	widget_button(win,&fy,&fx,screen_cols-(fx*2),callback_chat_block,selected);
+
+//	[ KILL ]
+	fy += 2, fx = 2;
+	widget_button(win,&fy,&fx,screen_cols-(fx*2),callback_chat_kill,text_tooltip_button_kill);
+
+//	[ Delete ]
+	fy += 2, fx = 2;
+	widget_button(win,&fy,&fx,screen_cols-(fx*2),callback_chat_delete,text_tooltip_button_delete);
+
+//	[ Clear History ]
+	fy += 2, fx = 2;
+	widget_button(win,&fy,&fx,screen_cols-(fx*2),callback_chat_clear,text_tooltip_button_delete_log);
 
 	widget_draw_cursor(win); // XXX Must do last
 }
@@ -2422,8 +2569,13 @@ static void draw_group_invite(void)
 	WINDOW *win = window_prepare(&draw_group_invite,&window_group_invite,&focus_group_invite); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
+	size_t fy = 0,fx = 2;
+	// Draw top line widgets
+	wattron(win,A_BOLD); // bold on
+	mvwprintw_size(win,fy,fx,"%s",text_invite_friend); // do not wrap
+	wattroff(win,A_BOLD); // bold off
 
-
+	// draw_scrollable // TODO
 
 	widget_draw_cursor(win); // XXX Must do last
 }
@@ -2433,8 +2585,13 @@ static void draw_group_peerlist(void)
 	WINDOW *win = window_prepare(&draw_group_peerlist,&window_group_peerlist,&focus_group_peerlist); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
+	size_t fy = 0,fx = 2;
+	// Draw top line widgets
+	wattron(win,A_BOLD); // bold on
+	mvwprintw_size(win,fy,fx,"%s",text_group_peers); // do not wrap
+	wattroff(win,A_BOLD); // bold off
 
-
+	// draw_scrollable // TODO 
 
 	widget_draw_cursor(win); // XXX Must do last
 }
