@@ -162,6 +162,7 @@ static size_t inner_width;
 static int selected_n = 0; // internal use only, contact list
 static int treeview_n = 0; // IDs/Requests pages/popovers
 static int global_n = -1;
+static int global_group = -1;
 static volatile sig_atomic_t resized = 0;
 static volatile sig_atomic_t resize_seq = 0;
 
@@ -258,6 +259,12 @@ static size_t tmp_debug_level_pos = 0;
 
 /* Actions State */
 // Note: utilizes tmp_rename tmp_rename_cursor
+
+/* Group Invite State */
+static size_t group_invite_scroll_offset = 0;
+
+/* Group Peerlist State */
+static size_t group_peerlist_scroll_offset = 0;
 
 /* Scrollable state */
 static int8_t predicting = 0;
@@ -827,7 +834,10 @@ static void go_back(size_t motions)
 		else if(window_chat || window_requests || window_ids || window_settings || window_generate || window_logs || window_global_kill)
 		{
 			if(window_chat)
+			{
 				global_n = -1;
+				global_group = -1;
+			}
 			else if(window_settings)
 			{
 				torx_free((void*)&tmp_snowflake_location);
@@ -857,7 +867,7 @@ static void go_back(size_t motions)
 			else // Must prepare prior to destruction
 				window_prepare(&draw_contacts,&window_contacts,&focus_contacts);
 		}
-		else if(window_chat_actions || window_chat_settings || window_group_invite || window_group_peerlist)
+		else if(window_chat_actions || window_chat_settings)
 		{
 			if(window_chat_actions)
 				torx_free((void*)&tmp_rename);
@@ -865,6 +875,13 @@ static void go_back(size_t motions)
 				draw_chat();
 			else // Must prepare prior to destruction
 				window_prepare(&draw_chat,&window_chat,&focus_chat);
+		}
+		else if(window_group_invite || window_group_peerlist)
+		{
+			if(motions < 2)
+				draw_chat_actions();
+			else // Must prepare prior to destruction
+				window_prepare(&draw_chat_actions,&window_chat_actions,&focus_chat_actions);
 		}
 		else if(window_torrc || window_change_password)
 		{
@@ -1977,6 +1994,33 @@ static int callback_popover(const int w)
 	return 0; // Do not rebuild
 }
 
+static int callback_pm(const int w)
+{ // utilizes treeview_n
+	(void)w;
+	if(t_peer[global_n].edit_n > -1 && t_peer[global_n].edit_i > INT_MIN)
+	{
+		t_peer[global_n].edit_n = -1;
+		t_peer[global_n].edit_i = INT_MIN;
+	}
+	t_peer[global_n].pm_n = treeview_n;
+	go_back(1);
+	return 0; // Do not rebuild
+}
+
+static int callback_invite(const int w)
+{ // utilizes treeview_n
+	(void)w;
+	const int g = global_group;
+	const uint32_t g_peercount = getter_group_uint32(g,offsetof(struct group_list,peercount));
+	const uint8_t g_invite_required = getter_group_uint8(g,offsetof(struct group_list,invite_required));
+	if(g_invite_required == 1 && g_peercount == 0)
+		message_send(treeview_n,ENUM_PROTOCOL_GROUP_OFFER_FIRST,itovp(global_group),GROUP_OFFER_FIRST_LEN);
+	else
+		message_send(treeview_n,ENUM_PROTOCOL_GROUP_OFFER,itovp(global_group),GROUP_OFFER_LEN);
+	go_back(1);
+	return 0; // Do not rebuild
+}
+
 static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_t *scroll_offset)
 {
 	if(!win || !fyp || !fxp || !focus || !scroll_offset)
@@ -1984,7 +2028,21 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 	const size_t widgets_existing_before_scrollable = torx_allocation_len(widget) / sizeof(struct widget);
 	size_t iter = *scroll_offset;
 	current_scroll_offset = scroll_offset;
-	if(win == window_ids || win == window_requests)
+	if(win == window_group_invite || win == window_group_peerlist)
+	{ // ui_populate_peer_popover / ui_populate_group_peerlist_popover
+		int len = 0;
+		int *array = refined_list(&len,window_group_invite ? ENUM_OWNER_CTRL : ENUM_OWNER_GROUP_PEER,window_group_invite ? ENUM_STATUS_FRIEND : global_group,NULL);
+		for(int pos = 0 ; pos < len ; pos++)
+		{
+			char *peernick = getter_string(array[pos],INT_MIN,-1,offsetof(struct peer_list,peernick));
+			*fyp += 1,*fxp = 2;
+			if(widget_button(win,fyp,fxp,screen_cols-(2*2)+1,window_group_invite ? callback_invite : callback_pm,peernick) == *focus) // the +1 is to prevent wrapping
+				treeview_n = array[pos];
+			torx_free((void*)&peernick);
+		}
+		torx_free((void*)&array);
+	}
+	else if(win == window_ids || win == window_requests)
 	{
 		int len;
 		int *array;
@@ -2017,6 +2075,7 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 			sodium_memzero(label,sizeof(label));
 			torx_free((void*)&peernick);
 		}
+		torx_free((void*)&array);
 	}
 	else
 		while(scrollable(win,fyp,fxp,iter)) // Prints a "widget" for every iter. Returns 0 when there is no space left, or we run out of widgets to print.
@@ -2455,12 +2514,12 @@ static void draw_chat_actions(void)
 		const int g = set_g(global_n,NULL);
 		const uint8_t g_invite_required = getter_group_uint8(g,offsetof(struct group_list,invite_required));
 
-		fy += 2, fx = 2;
-		widget_button(win,&fy,&fx,screen_cols-(2*2),callback_group_peerlist,"Show Peerlist");
+		fy += 2, fx = align_right(strlen(text_current_members));
+		widget_button(win,&fy,&fx,screen_cols-(2*2),callback_group_peerlist,text_current_members);
 
 		if(g_invite_required)
 		{
-			fy += 2, fx = 2;
+			fy += 2, fx = align_right(strlen(text_invite_friend));
 			widget_button(win,&fy,&fx,screen_cols-(2*2),callback_group_invite,text_invite_friend);
 		}
 		else
@@ -2472,8 +2531,8 @@ static void draw_chat_actions(void)
 			char *group_id_encoded = b64_encode(id,GROUP_ID_SIZE);
 			fy += 2, fx = 2;
 			print_wrapped(win, &fy, &fx, screen_cols-(2*2), text_groupid, strlen(text_groupid));
-			fy += 2, fx = 2;
-			print_wrapped(win, &fy, &fx, screen_cols-(2*2), group_id_encoded, strlen(group_id_encoded));
+			fy += 2, fx = align_right(torx_allocation_len(group_id_encoded)-1);
+			print_wrapped(win, &fy, &fx, screen_cols-(2*2), group_id_encoded, torx_allocation_len(group_id_encoded)-1);
 			sodium_memzero(id,sizeof(id));
 			torx_free((void*)&group_id_encoded);
 		}
@@ -2615,7 +2674,7 @@ static void draw_group_invite(void)
 	mvwprintw_size(win,fy,fx,"%s",text_invite_friend); // do not wrap
 	wattroff(win,A_BOLD); // bold off
 
-	// draw_scrollable // TODO
+	draw_scrollable(win,&fy,&fx,&focus_group_invite,&group_invite_scroll_offset);
 
 	widget_draw_cursor(win); // XXX Must do last
 }
@@ -2631,7 +2690,7 @@ static void draw_group_peerlist(void)
 	mvwprintw_size(win,fy,fx,"%s",text_group_peers); // do not wrap
 	wattroff(win,A_BOLD); // bold off
 
-	// draw_scrollable // TODO 
+	draw_scrollable(win,&fy,&fx,&focus_group_peerlist,&group_peerlist_scroll_offset);
 
 	widget_draw_cursor(win); // XXX Must do last
 }
@@ -2979,18 +3038,34 @@ static int callback_message_input(const int w)
 		return 1; // Ignore it, but trigger rebuild to prevent it from being appended.
 	else if(t_peer[n].unsent_pos == unsent_len)
 	{ // send message
-		int g = -1;
-		uint8_t g_invite_required = 0;
-		const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-		if(owner == ENUM_OWNER_GROUP_CTRL)
+		if(t_peer[n].edit_n > -1 && t_peer[n].edit_i > INT_MIN)
 		{
-			g = set_g(n,NULL);
-			g_invite_required = getter_group_uint8(g,offsetof(struct group_list,invite_required));
+			message_edit(t_peer[n].edit_n,t_peer[n].edit_i,t_peer[n].unsent);
+			t_peer[n].edit_n = -1;
+			t_peer[n].edit_i = INT_MIN;
 		}
-		if(owner == ENUM_OWNER_GROUP_CTRL && g_invite_required) // date && sign private group messages
-			message_send(n,ENUM_PROTOCOL_UTF8_TEXT_DATE_SIGNED,t_peer[n].unsent,torx_allocation_len(t_peer[n].unsent)-1);
-		else // regular messages, private messages (in authenticated pipes), public messages in public groups (in authenticated pipes)
-			message_send(n,ENUM_PROTOCOL_UTF8_TEXT,t_peer[n].unsent,torx_allocation_len(t_peer[n].unsent)-1);
+	/*	else if(t_peer[n].edit_n > -1)
+		{ // NOT in use, but we could. This is how we do it in GTK
+			change_nick(t_peer[n].edit_n,t_peer[n].unsent);
+			t_peer[n].edit_n = -1
+		}	*/
+		else if(t_peer[n].pm_n > -1) // send to GROUP_PEER instead of GROUP_CTRL
+			message_send(t_peer[n].pm_n,ENUM_PROTOCOL_UTF8_TEXT_PRIVATE,t_peer[n].unsent,(uint32_t)torx_allocation_len(t_peer[n].unsent) - 1);
+		else
+		{
+			int g = -1;
+			uint8_t g_invite_required = 0;
+			const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+			if(owner == ENUM_OWNER_GROUP_CTRL)
+			{
+				g = set_g(n,NULL);
+				g_invite_required = getter_group_uint8(g,offsetof(struct group_list,invite_required));
+			}
+			if(owner == ENUM_OWNER_GROUP_CTRL && g_invite_required) // date && sign private group messages
+				message_send(n,ENUM_PROTOCOL_UTF8_TEXT_DATE_SIGNED,t_peer[n].unsent,torx_allocation_len(t_peer[n].unsent)-1);
+			else // regular messages, private messages (in authenticated pipes), public messages in public groups (in authenticated pipes)
+				message_send(n,ENUM_PROTOCOL_UTF8_TEXT,t_peer[n].unsent,torx_allocation_len(t_peer[n].unsent)-1);
+		}
 		torx_free((void*)&t_peer[n].unsent);
 		t_peer[n].unsent_pos = 0;
 		chat_scroll_lines = 0;
@@ -3055,7 +3130,7 @@ static void draw_chat(void)
 	struct msg_list *page;
 	if(owner == ENUM_OWNER_GROUP_CTRL)
 	{
-		g = set_g(n,NULL);
+		global_group = g = set_g(n,NULL);
 		pthread_rwlock_rdlock(&mutex_expand_group); // 🟧
 		page = group[g].msg_first;
 		msg_count = (int)group[g].msg_count;
