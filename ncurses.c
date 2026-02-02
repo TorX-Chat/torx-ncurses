@@ -213,8 +213,8 @@ static size_t ids_scroll_offset = 0;
 
 /* IDs / Requests Popover state */
 static size_t popover_scroll_offset = 0;
-static char *tmp_rename = NULL;
-static size_t tmp_rename_pos = 0;
+static char *tmp_rename = NULL; // Note: also utilized elsewhere
+static size_t tmp_rename_pos = 0; // Note: also utilized elsewhere
 
 /* Settings state */
 static size_t settings_scroll_offset = 0;
@@ -255,6 +255,9 @@ static size_t torx_log_buffer_pos = 0;
 static uint8_t tor_log_mode = 0; // 0 == torx logs, 1 == tor logs
 static char *tmp_debug_level = NULL;
 static size_t tmp_debug_level_pos = 0;
+
+/* Actions State */
+// Note: utilizes tmp_rename tmp_rename_cursor
 
 /* Scrollable state */
 static int8_t predicting = 0;
@@ -856,6 +859,8 @@ static void go_back(size_t motions)
 		}
 		else if(window_chat_actions || window_chat_settings || window_group_invite || window_group_peerlist)
 		{
+			if(window_chat_actions)
+				torx_free((void*)&tmp_rename);
 			if(motions < 2)
 				draw_chat();
 			else // Must prepare prior to destruction
@@ -1757,7 +1762,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 				selected = languages_available_name[1];
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(*fxp*2), text_set_select_language, strlen(text_set_select_language));
-			*fyp += 1,*fxp = screen_cols - strlen(selected) - 2;
+			*fyp += 1,*fxp = align_right(strlen(selected));
 			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_language,selected);
 		}
 		else if(item_to_draw == 1)
@@ -1768,7 +1773,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 				selected = text_dark;
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(*fxp*2), text_set_select_theme, strlen(text_set_select_theme));
-			*fyp += 1,*fxp = screen_cols - strlen(selected) - 2;
+			*fyp += 1,*fxp = align_right(strlen(selected));
 			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_theme,selected);
 		}
 		else if(item_to_draw == 2)
@@ -1779,7 +1784,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 				selected = text_generate_onionid;
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_onionid_or_torxid, strlen(text_set_onionid_or_torxid));
-			*fyp += 1,*fxp = screen_cols - strlen(selected) - 2;
+			*fyp += 1,*fxp = align_right(strlen(selected));
 			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_onionid_or_torxid,selected);
 		}
 		else if(item_to_draw == 3)
@@ -1790,7 +1795,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 				selected = text_disable;
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_global_log, strlen(text_set_global_log));
-			*fyp += 1,*fxp = screen_cols - strlen(selected) - 2;
+			*fyp += 1,*fxp = align_right(strlen(selected));
 			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_global_log_messages,selected);
 		}
 		else if(item_to_draw == 4)
@@ -1798,7 +1803,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_tor,text_binary_location);
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), label_text, len);
-			*fyp += 1,*fxp = screen_cols - (tmp_tor_location ? torx_allocation_len(tmp_tor_location) - 1 : 0) - 2;
+			*fyp += 1,*fxp = align_right((tmp_tor_location ? torx_allocation_len(tmp_tor_location) - 1 : 0));
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_tor_location,WIDGET_INPUT_SINGLE_LINE,&tmp_tor_location,&tmp_tor_location_pos);
 		}
 		else if(item_to_draw == 5)
@@ -1806,7 +1811,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_snowflake,text_binary_location);
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), label_text, len);
-			*fyp += 1,*fxp = screen_cols - (tmp_snowflake_location ? torx_allocation_len(tmp_snowflake_location) - 1 : 0) - 2;
+			*fyp += 1,*fxp = align_right((tmp_snowflake_location ? torx_allocation_len(tmp_snowflake_location) - 1 : 0));
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_snowflake_location,WIDGET_INPUT_SINGLE_LINE,&tmp_snowflake_location,&tmp_snowflake_location_pos);
 		}
 		else if(item_to_draw == 6)
@@ -1814,7 +1819,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_lyrebird,text_binary_location);
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), label_text, len);
-			*fyp += 1,*fxp = screen_cols - (tmp_lyrebird_location ? torx_allocation_len(tmp_lyrebird_location) - 1 : 0) - 2;
+			*fyp += 1,*fxp = align_right((tmp_lyrebird_location ? torx_allocation_len(tmp_lyrebird_location) - 1 : 0));
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_lyrebird_location,WIDGET_INPUT_SINGLE_LINE,&tmp_lyrebird_location,&tmp_lyrebird_location_pos);
 		}
 		else if(item_to_draw == 7)
@@ -1822,35 +1827,35 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_conjure,text_binary_location);
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), label_text, len);
-			*fyp += 1,*fxp = screen_cols - (tmp_conjure_location ? torx_allocation_len(tmp_conjure_location) - 1 : 0) - 2;
+			*fyp += 1,*fxp = align_right((tmp_conjure_location ? torx_allocation_len(tmp_conjure_location) - 1 : 0));
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_conjure_location,WIDGET_INPUT_SINGLE_LINE,&tmp_conjure_location,&tmp_conjure_location_pos);
 		}
 		else if(item_to_draw == 8)
 		{ // Maximum CPU threads for TorX-ID generation
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_cpu, strlen(text_set_cpu));
-			*fyp += 1,*fxp = screen_cols - torx_allocation_len(tmp_threads_max) - 1 - 2;
+			*fyp += 1,*fxp = align_right(tmp_threads_max ? torx_allocation_len(tmp_threads_max) - 1 : 0);
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_threads,WIDGET_INPUT_NUMERICAL,&tmp_threads_max,&tmp_threads_max_pos);
 		}
 		else if(item_to_draw == 9)
 		{ // Minimum Suffix Length for TorX-ID generation
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_suffix, strlen(text_set_suffix));
-			*fyp += 1,*fxp = screen_cols - torx_allocation_len(tmp_suffix_length) - 1 - 2;
+			*fyp += 1,*fxp = align_right(tmp_suffix_length ? torx_allocation_len(tmp_suffix_length) - 1 : 0);
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_suffix,WIDGET_INPUT_NUMERICAL,&tmp_suffix_length,&tmp_suffix_length_pos);
 		}
 		else if(item_to_draw == 10)
 		{ // Single-Use TorX-ID expiration time (days)
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_validity_sing, strlen(text_set_validity_sing));
-			*fyp += 1,*fxp = screen_cols - torx_allocation_len(tmp_sing_expiration_days) - 1 - 2;
+			*fyp += 1,*fxp = align_right(tmp_sing_expiration_days ? torx_allocation_len(tmp_sing_expiration_days) - 1 : 0);
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_sing_days,WIDGET_INPUT_NUMERICAL,&tmp_sing_expiration_days,&tmp_sing_expiration_days_pos);
 		}
 		else if(item_to_draw == 11)
 		{ // Multiple-Use TorX-ID expiration time (days)
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_validity_mult, strlen(text_set_validity_mult));
-			*fyp += 1,*fxp = screen_cols - torx_allocation_len(tmp_mult_expiration_days) - 1 - 2;
+			*fyp += 1,*fxp = align_right(tmp_mult_expiration_days ? torx_allocation_len(tmp_mult_expiration_days) - 1 : 0);
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_mult_dats,WIDGET_INPUT_NUMERICAL,&tmp_mult_expiration_days,&tmp_mult_expiration_days_pos);
 		}
 		else if(item_to_draw == 12)
@@ -1861,28 +1866,28 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 				selected = text_disable;
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_auto_mult, strlen(text_set_auto_mult));
-			*fyp += 1,*fxp = screen_cols - strlen(selected) - 2;
+			*fyp += 1,*fxp = align_right(strlen(selected));
 			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_auto_mult,selected);
 		}
 		else if(item_to_draw == 13)
 		{ // Tor SOCKS5 Port
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_tor_port_socks, strlen(text_set_tor_port_socks));
-			*fyp += 1,*fxp = screen_cols - torx_allocation_len(tmp_tor_socks_port) - 1 - 2;
+			*fyp += 1,*fxp = align_right(tmp_tor_socks_port ? torx_allocation_len(tmp_tor_socks_port) - 1 : 0);
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_socks_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_socks_port,&tmp_tor_socks_port_pos);
 		}
 		else if(item_to_draw == 14)
 		{ // Tor Control Port
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_tor_port_ctrl, strlen(text_set_tor_port_ctrl));
-			*fyp += 1,*fxp = screen_cols - torx_allocation_len(tmp_tor_ctrl_port) - 1 - 2;
+			*fyp += 1,*fxp = align_right(tmp_tor_ctrl_port ? torx_allocation_len(tmp_tor_ctrl_port) - 1 : 0);
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_ctrl_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_ctrl_port,&tmp_tor_ctrl_port_pos);
 		}
 		else if(item_to_draw == 15)
 		{ // Tor Control Password
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_set_tor_password, strlen(text_set_tor_password));
-			*fyp += 1,*fxp = screen_cols - (tmp_control_password_clear ? torx_allocation_len(tmp_control_password_clear) - 1 : 0) - 2;
+			*fyp += 1,*fxp = align_right((tmp_control_password_clear ? torx_allocation_len(tmp_control_password_clear) - 1 : 0));
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_ctrl_pass,WIDGET_INPUT_SINGLE_LINE,&tmp_control_password_clear,&tmp_control_password_clear_pos);
 		}
 		else
@@ -1895,7 +1900,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 		{ // Rename text_entry
 			*fyp += 2, *fxp = 2;
 			print_wrapped(win, fyp, fxp, screen_cols-(2*2), text_identifier, strlen(text_identifier));
-			*fyp += 1,*fxp = screen_cols - (tmp_rename ? torx_allocation_len(tmp_rename) - 1 : 0) - 2;
+			*fyp += 1,*fxp = align_right((tmp_rename ? torx_allocation_len(tmp_rename) - 1 : 0));
 			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_rename,WIDGET_INPUT_SINGLE_LINE,&tmp_rename,&tmp_rename_pos);
 		}
 		else if(item_to_draw == 1)
@@ -1908,7 +1913,7 @@ static uint8_t scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_
 			}
 			else if(window_requests_popover && !outgoing_mode)
 			{ // Accept Incoming request button
-				*fyp += 1, *fxp = screen_cols - strlen(text_accept) - 2;
+				*fyp += 1, *fxp = align_right(strlen(text_accept));
 				widget_button(win,fyp,fxp,screen_cols-(2*2),callback_peer_accept,text_accept);
 			}
 		}
@@ -2414,8 +2419,22 @@ static void draw_global_kill(void)
 	widget_draw_cursor(win); // XXX Must do last
 }
 
+static int callback_group_invite(const int w)
+{
+	(void)w;
+	draw_group_invite();
+	return 0; // Do not rebuild
+}
+
+static int callback_group_peerlist(const int w)
+{
+	(void)w;
+	draw_group_peerlist();
+	return 0; // Do not rebuild
+}
+
 static void draw_chat_actions(void)
-{ // Chat Actions Route (NOTE: global_n is still set)
+{ // Chat Actions Route (NOTE: global_n is still set). This should be nearly blank, as we have no gifs, file transfers, etc.
 	WINDOW *win = window_prepare(&draw_chat_actions,&window_chat_actions,&focus_chat_actions); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
@@ -2425,15 +2444,42 @@ static void draw_chat_actions(void)
 	mvwprintw_size(win,fy,fx,"%s",text_actions); // do not wrap
 	wattroff(win,A_BOLD); // bold off
 
-// This should be nearly blank, as we have no gifs, file transfers, etc
-//	Change Identifier
-// if(owner == ENUM_OWNER_GROUP_CTRL
+	fy += 2, fx = 2;
+	print_wrapped(win, &fy, &fx, screen_cols-(2*2), text_identifier, strlen(text_identifier));
+	fy += 1,fx = align_right((tmp_rename ? torx_allocation_len(tmp_rename) - 1 : 0));
+	widget_text(win,&fy,&fx,1,screen_cols-(2*2),callback_rename,WIDGET_INPUT_SINGLE_LINE,&tmp_rename,&tmp_rename_pos);
 
-// if(owner == ENUM_OWNER_GROUP_CTRL && Private Group)
-//	[ Invite Peer ]
-// if(owner == ENUM_OWNER_GROUP_CTRL && Public Group)
-//	( Shows GroupID)
-// EMOJI MENU ???? NO. Would be overly complicated, require settings to save frequently saved emojis. Future feature, perhaps.
+	const uint8_t owner = getter_uint8(global_n,INT_MIN,-1,offsetof(struct peer_list,owner));
+	if(owner == ENUM_OWNER_GROUP_CTRL)
+	{
+		const int g = set_g(global_n,NULL);
+		const uint8_t g_invite_required = getter_group_uint8(g,offsetof(struct group_list,invite_required));
+
+		fy += 2, fx = 2;
+		widget_button(win,&fy,&fx,screen_cols-(2*2),callback_group_peerlist,"Show Peerlist");
+
+		if(g_invite_required)
+		{
+			fy += 2, fx = 2;
+			widget_button(win,&fy,&fx,screen_cols-(2*2),callback_group_invite,text_invite_friend);
+		}
+		else
+		{ // Shows GroupID
+			unsigned char id[GROUP_ID_SIZE]; // zero'd
+			pthread_rwlock_rdlock(&mutex_expand_group); // 🟧
+			memcpy(id,group[g].id,sizeof(id));
+			pthread_rwlock_unlock(&mutex_expand_group); // 🟩
+			char *group_id_encoded = b64_encode(id,GROUP_ID_SIZE);
+			fy += 2, fx = 2;
+			print_wrapped(win, &fy, &fx, screen_cols-(2*2), text_groupid, strlen(text_groupid));
+			fy += 2, fx = 2;
+			print_wrapped(win, &fy, &fx, screen_cols-(2*2), group_id_encoded, strlen(group_id_encoded));
+			sodium_memzero(id,sizeof(id));
+			torx_free((void*)&group_id_encoded);
+		}
+	}
+
+// TODO EMOJI MENU ???? NO. Could be complicated, require settings to save frequently saved emojis. Future feature, perhaps.
 
 	widget_draw_cursor(win); // XXX Must do last
 }
@@ -2516,7 +2562,6 @@ static void draw_chat_settings(void)
 
 	const char *selected;
 
-//	[ Logging ]
 	const int8_t log_messages = getter_int8(global_n,INT_MIN,-1,offsetof(struct peer_list,log_messages));
 	if(log_messages == -1)
 		selected = text_tooltip_logging_disabled;
@@ -2530,36 +2575,31 @@ static void draw_chat_settings(void)
 	else if(log_messages == 1)
 		selected = text_tooltip_logging_enabled;
 	fy += 2, fx = 2;
-	widget_button(win,&fy,&fx,screen_cols-(fx*2),callback_chat_logging,selected);
+	widget_button(win,&fy,&fx,screen_cols-(2*2),callback_chat_logging,selected);
 
-//	[ Notifications ]
 	if(t_peer[global_n].mute == 1)
 		selected = text_tooltip_notifications_off;
 	else
 		selected = text_tooltip_notifications_on;
 	fy += 2, fx = 2;
-	widget_button(win,&fy,&fx,screen_cols-(fx*2),callback_chat_notifications,selected);
+	widget_button(win,&fy,&fx,screen_cols-(2*2),callback_chat_notifications,selected);
 
-//	[ Block ]
 	const uint8_t status = getter_uint8(global_n,INT_MIN,-1,offsetof(struct peer_list,status));
 	if(status == ENUM_STATUS_BLOCKED)
 		selected = text_tooltip_blocked_on;
 	else
 		selected = text_tooltip_blocked_off;
 	fy += 2, fx = 2;
-	widget_button(win,&fy,&fx,screen_cols-(fx*2),callback_chat_block,selected);
+	widget_button(win,&fy,&fx,screen_cols-(2*2),callback_chat_block,selected);
 
-//	[ KILL ]
 	fy += 2, fx = 2;
-	widget_button(win,&fy,&fx,screen_cols-(fx*2),callback_chat_kill,text_tooltip_button_kill);
+	widget_button(win,&fy,&fx,screen_cols-(2*2),callback_chat_kill,text_tooltip_button_kill);
 
-//	[ Delete ]
 	fy += 2, fx = 2;
-	widget_button(win,&fy,&fx,screen_cols-(fx*2),callback_chat_delete,text_tooltip_button_delete);
+	widget_button(win,&fy,&fx,screen_cols-(2*2),callback_chat_delete,text_tooltip_button_delete);
 
-//	[ Clear History ]
 	fy += 2, fx = 2;
-	widget_button(win,&fy,&fx,screen_cols-(fx*2),callback_chat_clear,text_tooltip_button_delete_log);
+	widget_button(win,&fy,&fx,screen_cols-(2*2),callback_chat_clear,text_tooltip_button_delete_log);
 
 	widget_draw_cursor(win); // XXX Must do last
 }
@@ -2737,6 +2777,8 @@ static int callback_global_kill(const int w)
 static int callback_chat_actions(const int w)
 {
 	(void)w;
+	tmp_rename = getter_string(global_n,INT_MIN,-1,offsetof(struct peer_list,peernick));
+	tmp_rename_pos = tmp_rename ? torx_allocation_len(tmp_rename) - 1 : 0;
 	draw_chat_actions();
 	return 0; // Do not rebuild
 }
@@ -2745,20 +2787,6 @@ static int callback_chat_settings(const int w)
 {
 	(void)w;
 	draw_chat_settings();
-	return 0; // Do not rebuild
-}
-
-static int callback_group_invite(const int w)
-{
-	(void)w;
-	draw_group_invite();
-	return 0; // Do not rebuild
-}
-
-static int callback_group_peerlist(const int w)
-{
-	(void)w;
-	draw_group_peerlist();
 	return 0; // Do not rebuild
 }
 
