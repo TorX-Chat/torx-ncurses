@@ -191,11 +191,16 @@ static size_t pw_new_cursor = 0;
 static size_t pw_verify_cursor = 0;
 
 /* Contact list state */
-static bool groups_mode = false;
+enum contact_list_values {
+	ENUM_SHOW_PEER,
+	ENUM_SHOW_GROUP,
+	ENUM_SHOW_BLOCK
+};
+static uint8_t groups_mode = ENUM_SHOW_PEER;
 static int list_first_peer_w = -1; // must initialize as -1 // This facilitates left-right navigation between peerlist and settings buttons
 
 /* Generate state */
-static bool group_mode = 0;
+static bool generate_group_mode = 0;
 static char *generate_input = NULL;
 static char *generate_output = NULL;
 static char *add_identifier = NULL;
@@ -2303,7 +2308,7 @@ static int callback_toggle_group(const int w)
 	torx_free((void*)&generate_output);
 	torx_free((void*)&add_identifier);
 	torx_free((void*)&add_id);
-	group_mode = !group_mode;
+	generate_group_mode = !generate_group_mode;
 	return 1; // Rebuild
 }
 
@@ -2311,7 +2316,7 @@ static int callback_attempt_connect(const int w)
 {
 	(void)w;
 	int ret = -1;
-	if(group_mode)
+	if(generate_group_mode)
 	{
 		unsigned char id[GROUP_ID_SIZE]; // zero'd
 		if(b64_decode(id,sizeof(id),add_id) == GROUP_ID_SIZE)
@@ -2335,7 +2340,7 @@ static int callback_generate_one(const int w)
 {
 	(void)w;
 	int g = -1;
-	if(group_mode) // generate invite-only
+	if(generate_group_mode) // generate invite-only
 		g = group_generate(1,generate_input);
 	else // generate sing
 		generate_onion(ENUM_OWNER_SING,NULL,generate_input);
@@ -2355,7 +2360,7 @@ static int callback_generate_two(const int w)
 {
 	(void)w;
 	int g = -1;
-	if(group_mode) // generate public group
+	if(generate_group_mode) // generate public group
 		g = group_generate(0,generate_input);
 	else // generate mult
 		generate_onion(ENUM_OWNER_MULT,NULL,generate_input);
@@ -2382,56 +2387,56 @@ static void draw_generate(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	mvwprintw_size(win,fy,fx,"%s",group_mode ? text_group : text_add_generate); // do not wrap
+	mvwprintw_size(win,fy,fx,"%s",generate_group_mode ? text_group : text_add_generate); // do not wrap
 	wattroff(win,A_BOLD); // bold off
 
 	char label[256];
-	size_t label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",group_mode ? text_peer : text_group);
+	size_t label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",generate_group_mode ? text_peer : text_group);
 	fx = align_right(label_len);
 	widget_button(win,&fy,&fx,label_len,callback_toggle_group,label);
 
 	wattron(win,A_BOLD); // bold on
-	label_len = strlen(group_mode ? text_add_group_by : text_add_peer_by);
+	label_len = strlen(generate_group_mode ? text_add_group_by : text_add_peer_by);
 	fy += 2, fx = align_center(label_len);
-	print_wrapped(win,&fy,&fx,screen_cols-(2*2),group_mode ? text_add_group_by : text_add_peer_by,label_len);
+	print_wrapped(win,&fy,&fx,screen_cols-(2*2),generate_group_mode ? text_add_group_by : text_add_peer_by,label_len);
 	wattroff(win,A_BOLD); // bold off
 
-	label_len = strlen(group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier);
+	label_len = strlen(generate_group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier);
 	fy += 2, fx = align_center(label_len);
-	print_wrapped(win,&fy,&fx,screen_cols-(2*2),group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier,label_len);
+	print_wrapped(win,&fy,&fx,screen_cols-(2*2),generate_group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier,label_len);
 
 	fy += 1, fx = align_center(add_identifier ? torx_allocation_len(add_identifier) - 1 : 0);
 	widget_text(win,&fy,&fx,screen_rows-fy,screen_cols-(2*2),NULL,WIDGET_INPUT_SINGLE_LINE,&add_identifier,&add_identifier_cursor);
 
-	label_len = strlen(group_mode ? text_placeholder_add_group_id : text_placeholder_add_onion);
+	label_len = strlen(generate_group_mode ? text_placeholder_add_group_id : text_placeholder_add_onion);
 	fy += 2, fx = align_center(label_len);
-	print_wrapped(win,&fy,&fx,screen_cols-(2*2),group_mode ? text_placeholder_add_group_id : text_placeholder_add_onion,label_len);
+	print_wrapped(win,&fy,&fx,screen_cols-(2*2),generate_group_mode ? text_placeholder_add_group_id : text_placeholder_add_onion,label_len);
 
 	fy += 1, fx = align_center(add_id ? torx_allocation_len(add_id) - 1 : 0);
 	widget_text(win,&fy,&fx,screen_rows-fy,screen_cols-(2*2),NULL,WIDGET_INPUT_SINGLE_LINE,&add_id,&add_id_cursor);
 
-	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",group_mode ? text_button_join : text_button_add);
+	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",generate_group_mode ? text_button_join : text_button_add);
 	fy += 2,fx = align_center(label_len);
 	widget_button(win,&fy,&fx,label_len,callback_attempt_connect,label);
 
 	wattron(win,A_BOLD); // bold on
-	label_len = strlen(group_mode ? text_generate_group_for : text_generate_for);
+	label_len = strlen(generate_group_mode ? text_generate_group_for : text_generate_for);
 	fy += 2, fx = align_center(label_len);
-	print_wrapped(win,&fy,&fx,screen_cols-(2*2),group_mode ? text_generate_group_for : text_generate_for,label_len);
+	print_wrapped(win,&fy,&fx,screen_cols-(2*2),generate_group_mode ? text_generate_group_for : text_generate_for,label_len);
 	wattroff(win,A_BOLD); // bold off
 
-	label_len = strlen(group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier);
+	label_len = strlen(generate_group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier);
 	fy += 2, fx = align_center(label_len);
-	print_wrapped(win,&fy,&fx,screen_cols-(2*2),group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier,label_len);
+	print_wrapped(win,&fy,&fx,screen_cols-(2*2),generate_group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier,label_len);
 
 	fy += 1, fx = align_center(generate_input ? torx_allocation_len(generate_input) - 1 : 0);
 	widget_text(win,&fy,&fx,screen_rows-fy,screen_cols-(2*2),NULL,WIDGET_INPUT_SINGLE_LINE,&generate_input,&generate_input_cursor);
 
-	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",group_mode ? text_button_generate_invite : text_button_sing);
+	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",generate_group_mode ? text_button_generate_invite : text_button_sing);
 	fy += 2,fx = align_center(label_len);
 	widget_button(win,&fy,&fx,label_len,callback_generate_one,label);
 
-	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",group_mode ? text_button_generate_public : text_button_mult);
+	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",generate_group_mode ? text_button_generate_public : text_button_mult);
 	fy += 1,fx = align_center(label_len);
 	widget_button(win,&fy,&fx,label_len,callback_generate_two,label);
 
@@ -2698,7 +2703,10 @@ static void draw_group_peerlist(void)
 static int callback_contacts_groups(const int w)
 {
 	(void)w;
-	groups_mode = !groups_mode;
+	if(groups_mode == ENUM_SHOW_BLOCK) // last
+		groups_mode = ENUM_SHOW_PEER; // first
+	else
+		groups_mode++;
 	list_first_peer_w = -1;
 	return 1; // Rebuild
 }
@@ -2879,14 +2887,23 @@ static void draw_contacts(void)
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
 	wattron(win,A_BOLD); // bold on
-	if(groups_mode)
-		mvwprintw_size(win,0,2,"%s",text_group); // do not wrap
-	else
+	if(groups_mode == ENUM_SHOW_PEER)
 		mvwprintw_size(win,0,2,"%s",text_peer); // do not wrap
+	else if(groups_mode == ENUM_SHOW_GROUP)
+		mvwprintw_size(win,0,2,"%s",text_group); // do not wrap
+	else if(groups_mode == ENUM_SHOW_BLOCK)
+		mvwprintw_size(win,0,2,"%s",text_block); // do not wrap
 	wattroff(win,A_BOLD); // bold off
 
 	char label[256];
-	size_t label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",groups_mode ? text_peer : text_group);
+	const char *selected;
+	if(groups_mode == ENUM_SHOW_PEER)
+		selected = text_peer;
+	else if(groups_mode == ENUM_SHOW_GROUP)
+		selected = text_group;
+	else // if(groups_mode == ENUM_SHOW_BLOCK)
+		selected = text_block;
+	size_t label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",selected);
 	size_t fy = 0,fx = align_right(label_len);
 	widget_button(win,&fy,&fx,label_len,callback_contacts_groups,label);
 
@@ -2916,10 +2933,12 @@ static void draw_contacts(void)
 
 	int len = 0;
 	int *array;
-	if(groups_mode)
-		array = refined_list(&len,ENUM_OWNER_GROUP_CTRL,ENUM_STATUS_FRIEND,NULL);
-	else
+	if(groups_mode == ENUM_SHOW_PEER)
 		array = refined_list(&len,ENUM_OWNER_CTRL,ENUM_STATUS_FRIEND,NULL);
+	else if(groups_mode == ENUM_SHOW_GROUP)
+		array = refined_list(&len,ENUM_OWNER_GROUP_CTRL,ENUM_STATUS_FRIEND,NULL);
+	else if(groups_mode == ENUM_SHOW_BLOCK)
+		array = refined_list(&len,ENUM_OWNER_CTRL,ENUM_STATUS_BLOCKED,NULL);
 	if(len)
 	{
 		for(size_t pos = 0; pos < (size_t)len; ++pos)
@@ -3328,21 +3347,21 @@ static int await_key_or_signal(WINDOW *win)
 				{
 				//	const int n = cb_page->cb_args->mem_int_a;
 					const uint8_t owner = cb_page->cb_args->mem_uint8;
-					if(window_contacts && ((owner == ENUM_OWNER_GROUP_CTRL && groups_mode) || (owner == ENUM_OWNER_CTRL && !groups_mode)))
+					if(window_contacts && ((owner == ENUM_OWNER_GROUP_CTRL && groups_mode == ENUM_SHOW_GROUP) || (owner == ENUM_OWNER_CTRL && groups_mode != ENUM_SHOW_GROUP)))
 						must_redraw_ui = -2; // alt: draw_contacts();
 				}
 				else if(cb_page->cb_type == ENUM_PEER_ONLINE)
 				{
 					const int n = cb_page->cb_args->mem_int_a;
 					const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-					if(window_contacts && owner == ENUM_OWNER_CTRL && !groups_mode)
+					if(window_contacts && owner == ENUM_OWNER_CTRL && groups_mode == ENUM_SHOW_PEER)
 						must_redraw_ui = -2; // alt: draw_contacts();
 				}
 				else if(cb_page->cb_type == ENUM_PEER_OFFLINE)
 				{
 					const int n = cb_page->cb_args->mem_int_a;
 					const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-					if(window_contacts && owner == ENUM_OWNER_CTRL && !groups_mode)
+					if(window_contacts && owner == ENUM_OWNER_CTRL && groups_mode == ENUM_SHOW_PEER)
 						must_redraw_ui = -2; // alt: draw_contacts();
 				}
 				else if(cb_page->cb_type == ENUM_PEER_NEW)
