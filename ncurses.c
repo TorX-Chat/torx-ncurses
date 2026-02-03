@@ -60,6 +60,10 @@ any form.
 severable if found in contradiction with the License or applicable law.
 */
 #include <torx.h>
+#include <ncurses.h>
+#include <locale.h>	// setlocale, for utilizing utf8
+#include <unistd.h>	// read,write,pipe,close
+#include <fcntl.h>	// related to pipe
 
 #define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.38 2025/11/26 by TorX\n© Copyright 2025 TorX.\n"
 #define DARK_THEME 0
@@ -88,14 +92,20 @@ static inline void initialize_library(void (*callback)(void))
 	intitialize_async_callbacks(callback);
 	initial();
 
+	char current_working_directory[PATH_MAX];
+	if(getcwd(current_working_directory,sizeof(current_working_directory)))
+	{ // Do not use starting_dir because cwd has been changed by initial
+		char tdd_full_path[PATH_MAX];
+		const int tdd_len = snprintf(tdd_full_path,sizeof(tdd_full_path),"%s%ctor_data_directory",current_working_directory,platform_slash) + 1;
+		pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
+		tor_data_directory = torx_insecure_malloc((size_t)tdd_len);
+		memcpy(tor_data_directory,tdd_full_path,(size_t)tdd_len);
+		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+	}
+
 	if(no_password)
 		login_start("");
 }
-
-#include <ncurses.h>
-#include <locale.h>	// setlocale, for utilizing utf8
-#include <unistd.h>	// read,write,pipe,close
-#include <fcntl.h>	// related to pipe
 
 #define minimum_size_horizontal 20 // Do not eliminate this or we have to go back to using int instead of size_t and checking for negative values
 #define minimum_size_vertical 2
@@ -133,7 +143,6 @@ enum widget_types {
 	WIDGET_INPUT_NUMERICAL,
 	WIDGET_OUTPUT_MULTI_LINE,
 	WIDGET_CHECKBOX
-// TODO how will we handle scrolled windows? As a widget or not?
 };
 
 static struct widget {
@@ -166,6 +175,11 @@ static int global_group = -1;
 static volatile sig_atomic_t resized = 0;
 static volatile sig_atomic_t resize_seq = 0;
 static char *search = NULL;
+
+static int log_unread = 1; // TODO unused (NOT YET LOGGING UNREAD COUNTS)
+static size_t totalUnreadPeer = 0;  // TODO unused
+static size_t totalUnreadGroup = 0; // TODO unused
+static size_t totalIncoming = 0; // TODO unused
 
 static bool running = true; // set to false to exit
 static int sig_num = 0;
@@ -363,7 +377,7 @@ static const char *text_pause = {0};
 static const char *text_choose_file = {0};
 static const char *text_choose_files = {0};
 static const char *text_choose_folder = {0};
-static const char *text_open_folder = {0}; // TODO implement after 4.10 drops
+static const char *text_open_folder = {0};
 static const char *text_cancel = {0};
 static const char *text_transfer_paused = {0};
 static const char *text_transfer_rejected = {0};
@@ -1112,11 +1126,6 @@ static int keypress(const int w, const int ch)
 			return 1;
 		}
 		beep();
-	}
-	else if(widget[w].type == WIDGET_INPUT_MULTI_LINE && (ch == '\n' || ch == KEY_ENTER || ch =='\r'))
-	{ // Append newline to WIDGET_INPUT_MULTI_LINE
-		append_character_at_cursor(w,'\n');
-		return 1; // Rebuild
 	}
 	else if(widget[w].callback && (ch == '\n' || ch == KEY_ENTER || ch =='\r' || (ch == ' ' && (!widget[w].cursor || !widget[w].text || widget[w].type == WIDGET_OUTPUT_MULTI_LINE))))
 		return widget[w].callback(w); // XXX MUST BE LAST because if this contains a draw_, it will free widget
@@ -2489,7 +2498,7 @@ static int callback_change_password(const int w)
 }
 
 static void draw_settings(void)
-{ // Settings Route TODO be sure all of these things being set can sunsequently be read using ENUM_CUSTOM_SETTING
+{ // Settings Route. Be sure all of these things being set can sunsequently be read using ENUM_CUSTOM_SETTING.
 	WINDOW *win = window_prepare(&draw_settings,&window_settings,&focus_settings); // XXX Must do first
 
 	size_t fy = 0,fx = 2;
@@ -2759,7 +2768,7 @@ static void draw_chat_actions(void)
 }
 
 static void draw_chat_settings(void)
-{ // Chat Settings Route (NOTE: global_n is still set) TODO be sure all of these things being set can sunsequently be read using ENUM_CUSTOM_SETTING
+{ // Chat Settings Route (NOTE: global_n is still set). Be sure all of these things being set can sunsequently be read using ENUM_CUSTOM_SETTING.
 	WINDOW *win = window_prepare(&draw_chat_settings,&window_chat_settings,&focus_chat_settings); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
@@ -3210,8 +3219,8 @@ static int callback_message_input(const int w)
 		t_peer[n].unsent_pos = 0;
 		chat_scroll_lines = 0;
 	}
-	else
-		return 0; // Insert newline at cursor
+	else // Insert newline at cursor
+		append_character_at_cursor(w,'\n');
 	return 1; // Rebuild
 }
 
@@ -3475,6 +3484,7 @@ static int await_key_or_signal(WINDOW *win)
 				else if(cb_page->cb_type == ENUM_INCOMING_FRIEND_REQUEST)
 				{
 					error_simple(0,"Checkpoint ENUM_INCOMING_FRIEND_REQUEST"); // TODO
+					notify("TODO","ENUM_INCOMING_FRIEND_REQUEST");
 				}
 				else if(cb_page->cb_type == ENUM_ONION_DELETED)
 				{
@@ -3534,12 +3544,21 @@ static int await_key_or_signal(WINDOW *win)
 				}
 				else if(cb_page->cb_type == ENUM_CUSTOM_SETTING)
 				{
-				//	const int n = cb_page->cb_args->mem_int_a;
+					const int n = cb_page->cb_args->mem_int_a;
 					const char *setting_name = cb_page->cb_args->mem_charp_a;
 					const char *setting_value = cb_page->cb_args->mem_charp_b;
 					size_t setting_value_len = cb_page->cb_args->mem_size;
 					int plaintext = cb_page->cb_args->mem_int_b;
-					if(!strncmp(setting_name,"language",8) && sizeof(language) == setting_value_len+1)
+					if(!strncmp(setting_name,"theme",5))
+					{
+						const int proposed_theme = (int)strtoll(setting_value, NULL, 10);
+						if(proposed_theme != global_theme && global_theme > -1 && proposed_theme != THEME_DEFAULT)
+						{ // Checking that it is (a) a change and (b) that we have already initialized, or that we haven't but we are different than default
+							global_theme = proposed_theme;
+							must_redraw_ui = -2;
+						}
+					}
+					else if(!strncmp(setting_name,"language",8) && sizeof(language) == setting_value_len+1)
 					{ // We are requiring the language to be exactly 5 characters long to be considered valid (ex: en_US)
 						if(memcmp(language,setting_value,sizeof(language)))
 						{ // Loading a different language setting.
@@ -3547,6 +3566,24 @@ static int await_key_or_signal(WINDOW *win)
 							language[setting_value_len] = '\0';
 							ui_initialize_language();
 							must_redraw_ui = -2;
+						}
+					}
+					else if(plaintext == 0 && !strncmp(setting_name,"mute",4))
+						t_peer[n].mute = (int8_t)strtoll(setting_value, NULL, 10);
+					else if(plaintext == 0 && !strncmp(setting_name,"unread",6))
+					{
+						if(log_unread != 1)
+							return 0; // ignoring (potentially old)
+						t_peer[n].unread = strtoull(setting_value, NULL, 10);
+						if(t_peer[n].unread > 0)
+						{
+							const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+							if (owner == ENUM_OWNER_GROUP_CTRL)
+								totalUnreadGroup += t_peer[n].unread;
+							else
+								totalUnreadPeer += t_peer[n].unread;
+							if(window_contacts)
+								must_redraw_ui = -2;
 						}
 					}
 					else if(plaintext == 0)
@@ -3576,11 +3613,11 @@ static int await_key_or_signal(WINDOW *win)
 				}
 				else if(cb_page->cb_type == ENUM_MESSAGE_MODIFIED)
 				{
-					error_simple(0,"Checkpoint ENUM_MESSAGE_MODIFIED"); // TODO
+					error_simple(0,"Checkpoint ENUM_MESSAGE_MODIFIED"); // TODO consider redrawing? Perhaps shouldn't need to do anything in ncurses.
 				}
 				else if(cb_page->cb_type == ENUM_MESSAGE_DELETED)
 				{
-					error_simple(0,"Checkpoint ENUM_MESSAGE_DELETED"); // TODO
+					error_simple(0,"Checkpoint ENUM_MESSAGE_DELETED"); // TODO consider redrawing? Perhaps shouldn't need to do anything in ncurses.
 				}
 				else if(cb_page->cb_type == ENUM_LOGIN)
 				{
@@ -3592,7 +3629,7 @@ static int await_key_or_signal(WINDOW *win)
 				}
 				else if(cb_page->cb_type == ENUM_PEER_LOADED)
 				{
-					error_simple(0,"Checkpoint ENUM_PEER_LOADED"); // TODO
+					error_simple(0,"Checkpoint ENUM_PEER_LOADED"); // TODO redraw if window_contacts.... etc
 				}
 				else if(cb_page->cb_type == ENUM_CLEANUP)
 				{
@@ -3602,15 +3639,15 @@ static int await_key_or_signal(WINDOW *win)
 				}
 				else if(cb_page->cb_type == ENUM_STREAM)
 				{
-					error_simple(0,"Checkpoint ENUM_STREAM"); // TODO
+					error_simple(0,"Checkpoint ENUM_STREAM"); // TODO ignore
 				}
 				else if(cb_page->cb_type == ENUM_MESSAGE_EXTRA)
 				{
-					error_simple(0,"Checkpoint ENUM_MESSAGE_EXTRA"); // TODO
+					error_simple(0,"Checkpoint ENUM_MESSAGE_EXTRA"); // TODO ???
 				}
 				else if(cb_page->cb_type == ENUM_MESSAGE_MORE)
 				{
-					error_simple(0,"Checkpoint ENUM_MESSAGE_MORE"); // TODO
+					error_simple(0,"Checkpoint ENUM_MESSAGE_MORE"); // TODO ???
 				}
 				else if(cb_page->cb_type == ENUM_UNKNOWN)
 				{
