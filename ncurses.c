@@ -849,6 +849,15 @@ static void go_back(size_t motions)
 		{
 			if(window_chat)
 			{
+				if(t_peer[global_n].pm_n > -1 || t_peer[global_n].edit_n > -1)
+				{
+					t_peer[global_n].pm_n = -1;
+					t_peer[global_n].edit_n = -1;
+					t_peer[global_n].edit_i = INT_MIN;
+					if(motions < 2)
+						redraw();
+					continue;
+				}
 				global_n = -1;
 				global_group = -1;
 			}
@@ -2363,7 +2372,7 @@ static int callback_pm(const int w)
 		t_peer[global_n].edit_i = INT_MIN;
 	}
 	t_peer[global_n].pm_n = treeview_n;
-	go_back(1);
+	go_back(2);
 	return 0; // Do not rebuild
 }
 
@@ -2377,7 +2386,7 @@ static int callback_invite(const int w)
 		message_send(treeview_n,ENUM_PROTOCOL_GROUP_OFFER_FIRST,itovp(global_group),GROUP_OFFER_FIRST_LEN);
 	else
 		message_send(treeview_n,ENUM_PROTOCOL_GROUP_OFFER,itovp(global_group),GROUP_OFFER_LEN);
-	go_back(1);
+	go_back(2);
 	return 0; // Do not rebuild
 }
 
@@ -3237,7 +3246,19 @@ static void draw_chat(void)
 	mvwaddch(win, (int)mid, (int)screen_cols-1, ACS_RTEE);
 
 	size_t fy = 0,fx = 2;
-	mvwprintw_size(win, mid, fx, "%.*s",(int)(screen_cols-(fx*2)), text_navigation_chat); // do not wrap
+	if(t_peer[n].pm_n > -1)
+	{
+		char *peernick = getter_string(t_peer[n].pm_n,INT_MIN,-1,offsetof(struct peer_list,peernick));
+		char cancel_message[256]; // zero'd
+		snprintf(cancel_message,sizeof(cancel_message),"%s %s",text_private_messaging,peernick);
+		torx_free((void*)&peernick);
+		mvwprintw_size(win, mid, fx, "%.*s",(int)(screen_cols-(fx*2)), cancel_message); // do not wrap
+		sodium_memzero(cancel_message,sizeof(cancel_message));
+	}
+	else if(t_peer[n].edit_n > -1)
+		mvwprintw_size(win, mid, fx, "%.*s",(int)(screen_cols-(fx*2)), text_cancel_editing); // do not wrap
+	else
+		mvwprintw_size(win, mid, fx, "%.*s",(int)(screen_cols-(fx*2)), text_navigation_chat); // do not wrap
 
 	// Draw top line widgets
 	char *peernick = getter_string(n,INT_MIN,-1,offsetof(struct peer_list,peernick));
