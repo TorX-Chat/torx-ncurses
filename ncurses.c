@@ -165,6 +165,7 @@ static int global_n = -1;
 static int global_group = -1;
 static volatile sig_atomic_t resized = 0;
 static volatile sig_atomic_t resize_seq = 0;
+static char *search = NULL;
 
 static bool running = true; // set to false to exit
 static int sig_num = 0;
@@ -1046,9 +1047,9 @@ static int keypress(const int w, const int ch)
 		}
 		beep();
 	}
-	else if(ch == KEY_DELETE)
+	else if(ch == KEY_DELETE && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE)
 	{
-		if(widget[w].cursor && widget[w].text && *widget[w].cursor + 1 < torx_allocation_len(*widget[w].text))
+		if(*widget[w].cursor + 1 < torx_allocation_len(*widget[w].text))
 		{
 			const size_t prior_allocation_len = torx_allocation_len(*widget[w].text);
 			memmove(&(*widget[w].text)[*widget[w].cursor], &(*widget[w].text)[*widget[w].cursor+1], prior_allocation_len - *widget[w].cursor - 1);
@@ -1057,9 +1058,9 @@ static int keypress(const int w, const int ch)
 		}
 		beep();
 	}
-	else if(ch == KEY_BACKSPACE || ch == 127 || ch == 8)
+	else if((ch == KEY_BACKSPACE || ch == 127 || ch == 8) && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE)
 	{
-		if(widget[w].cursor && widget[w].text && *widget[w].cursor)
+		if(*widget[w].cursor)
 		{
 			const size_t prior_allocation_len = torx_allocation_len(*widget[w].text);
 			memmove(&(*widget[w].text)[*widget[w].cursor-1], &(*widget[w].text)[*widget[w].cursor], prior_allocation_len - *widget[w].cursor);
@@ -1078,6 +1079,30 @@ static int keypress(const int w, const int ch)
 			append_character_at_cursor(w,ch);
 			return 1; // Rebuild
 		}
+	}
+	else if(((ch >= 32 && ch <= 126) || ch == KEY_BACKSPACE || ch == 127 || ch == 8) && (window_contacts || window_ids || window_requests || window_group_invite || window_group_peerlist))
+	{ // Handle search entry
+		size_t allocation = torx_allocation_len(search);
+		if((ch == KEY_BACKSPACE || ch == 127 || ch == 8) && allocation > 1)
+		{
+			search = torx_realloc(search,--allocation);
+			search[allocation-1] = '\0';
+			return 1;
+		}
+		else if(ch >= 32 && ch <= 126)
+		{
+			if(allocation)
+				search = torx_realloc(search,++allocation);
+			else
+			{
+				allocation = 2;
+				search = torx_secure_malloc(allocation);
+			}
+			search[allocation - 2] = (char)ch;
+			search[allocation - 1] = '\0'; // redundant
+			return 1;
+		}
+		beep();
 	}
 	else if(widget[w].type == WIDGET_INPUT_MULTI_LINE && (ch == '\n' || ch == KEY_ENTER || ch =='\r'))
 	{ // Append newline to WIDGET_INPUT_MULTI_LINE
@@ -2366,7 +2391,7 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 	if(win == window_group_invite || win == window_group_peerlist)
 	{ // ui_populate_peer_popover / ui_populate_group_peerlist_popover
 		int len = 0;
-		int *array = refined_list(&len,window_group_invite ? ENUM_OWNER_CTRL : ENUM_OWNER_GROUP_PEER,window_group_invite ? ENUM_STATUS_FRIEND : global_group,NULL);
+		int *array = refined_list(&len,window_group_invite ? ENUM_OWNER_CTRL : ENUM_OWNER_GROUP_PEER,window_group_invite ? ENUM_STATUS_FRIEND : global_group,search);
 		for(int pos = 0 ; pos < len ; pos++)
 		{
 			char *peernick = getter_string(array[pos],INT_MIN,-1,offsetof(struct peer_list,peernick));
@@ -2382,9 +2407,9 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 		int len;
 		int *array;
 		if(win == window_ids)
-			array = refined_list(&len,single_mode ? ENUM_OWNER_SING : ENUM_OWNER_MULT,ENUM_STATUS_PENDING,NULL);
+			array = refined_list(&len,single_mode ? ENUM_OWNER_SING : ENUM_OWNER_MULT,ENUM_STATUS_PENDING,search);
 		else // if(win == window_requests)
-			array = refined_list(&len,outgoing_mode ? ENUM_OWNER_PEER : ENUM_OWNER_CTRL,ENUM_STATUS_PENDING,NULL);
+			array = refined_list(&len,outgoing_mode ? ENUM_OWNER_PEER : ENUM_OWNER_CTRL,ENUM_STATUS_PENDING,search);
 		const uint8_t shorten_torxids_local = threadsafe_read_uint8(&mutex_global_variable,&shorten_torxids);
 		while((int)iter < len)
 		{
@@ -2751,6 +2776,9 @@ static void draw_group_invite(void)
 	mvwprintw_size(win,fy,fx,"%s",text_invite_friend); // do not wrap
 	wattroff(win,A_BOLD); // bold off
 
+	if(search)
+		mvwprintw_size(win,0,align_right(torx_allocation_len(search) - 1),"%s",search); // do not wrap
+
 	draw_scrollable(win,&fy,&fx,&focus_group_invite,&group_invite_scroll_offset);
 
 	widget_draw_cursor(win); // XXX Must do last
@@ -2766,6 +2794,9 @@ static void draw_group_peerlist(void)
 	wattron(win,A_BOLD); // bold on
 	mvwprintw_size(win,fy,fx,"%s",text_group_peers); // do not wrap
 	wattroff(win,A_BOLD); // bold off
+
+	if(search)
+		mvwprintw_size(win,0,align_right(torx_allocation_len(search) - 1),"%s",search); // do not wrap
 
 	draw_scrollable(win,&fy,&fx,&focus_group_peerlist,&group_peerlist_scroll_offset);
 
@@ -2848,6 +2879,9 @@ static void draw_requests(void)
 	fx = align_right(label_len);
 	widget_button(win,&fy,&fx,label_len,callback_toggle_requests,label);
 
+	if(search)
+		mvwprintw_size(win,0,align_right(torx_allocation_len(search) + label_len),"%s",search); // do not wrap
+
 	label_len = (size_t)snprintf(label,sizeof(label),"%s %s",text_identifier, threadsafe_read_uint8(&mutex_global_variable,&shorten_torxids) ? text_torxid : text_onionid);
 	fx = 2;
 	print_wrapped(win,&fy,&fx,screen_cols-(2*2),label,label_len);
@@ -2879,6 +2913,9 @@ static void draw_ids(void)
 	size_t label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",single_mode ? text_active_mult : text_active_sing);
 	fx = align_right(label_len);
 	widget_button(win,&fy,&fx,label_len,callback_toggle_ids,label);
+
+	if(search)
+		mvwprintw_size(win,0,align_right(torx_allocation_len(search) + label_len),"%s",search); // do not wrap
 
 	label_len = (size_t)snprintf(label,sizeof(label),"%s %s %s",text_active,text_identifier, threadsafe_read_uint8(&mutex_global_variable,&shorten_torxids) ? text_torxid : text_onionid);
 	fx = 2;
@@ -2979,6 +3016,9 @@ static void draw_contacts(void)
 	size_t fy = 0,fx = align_right(label_len);
 	widget_button(win,&fy,&fx,label_len,callback_contacts_groups,label);
 
+	if(search)
+		mvwprintw_size(win,0,align_right(torx_allocation_len(search) + label_len),"%s",search); // do not wrap
+
 	label_len = (size_t)snprintf(label,sizeof(label),"[ %s ]",text_add_or_generate);
 	fx = align_right(label_len);
 	widget_button(win,&fy,&fx,label_len,callback_generate,label);
@@ -3006,11 +3046,11 @@ static void draw_contacts(void)
 	int len = 0;
 	int *array;
 	if(groups_mode == ENUM_SHOW_PEER)
-		array = refined_list(&len,ENUM_OWNER_CTRL,ENUM_STATUS_FRIEND,NULL);
+		array = refined_list(&len,ENUM_OWNER_CTRL,ENUM_STATUS_FRIEND,search);
 	else if(groups_mode == ENUM_SHOW_GROUP)
-		array = refined_list(&len,ENUM_OWNER_GROUP_CTRL,ENUM_STATUS_FRIEND,NULL);
+		array = refined_list(&len,ENUM_OWNER_GROUP_CTRL,ENUM_STATUS_FRIEND,search);
 	else if(groups_mode == ENUM_SHOW_BLOCK)
-		array = refined_list(&len,ENUM_OWNER_CTRL,ENUM_STATUS_BLOCKED,NULL);
+		array = refined_list(&len,ENUM_OWNER_CTRL,ENUM_STATUS_BLOCKED,search);
 	if(len)
 	{
 		for(size_t pos = 0; pos < (size_t)len; ++pos)
@@ -3702,6 +3742,7 @@ int main(int argc, char **argv)
 	}
 	// Clean-up
 	cleanup_lib(sig_num);
+	torx_free((void*)&search);
 	widget_clear(NULL);
 	endwin();
 	if(notify_fds[0] >= 0)
