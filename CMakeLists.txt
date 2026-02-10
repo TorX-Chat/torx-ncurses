@@ -85,6 +85,7 @@ endif()
 
 add_executable( ${PROJECT_NAME} ncurses.c )
 
+find_library(NCURSESW_LIBRARY ncursesw)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(NCURSESW REQUIRED ncursesw) # Must support UTF8
 target_include_directories(${PROJECT_NAME} PRIVATE ${NCURSESW_INCLUDE_DIRS})
@@ -120,6 +121,8 @@ target_link_libraries(
 		sqlcipher	## TODO required ONLY when BUILD_SHARED_LIBS=0
 )
 endif()
+
+target_compile_options(${PROJECT_NAME} PRIVATE ${NCURSESW_CFLAGS_OTHER})
 
 # Install the executables
 install(TARGETS ${PROJECT_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})

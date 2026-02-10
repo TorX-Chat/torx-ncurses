@@ -526,6 +526,7 @@ static inline size_t print_wrapped(WINDOW *win,size_t *y,size_t *x,const size_t 
 			}
 			if(printing) // not else if
 			{
+			//	mvwadd_wch(win, (int)(*y + offset_y), (int)(*x + offset_x), (const cchar_t *)&str[iter]);
 				mvwaddch(win, (int)(*y + offset_y), (int)(*x + offset_x), (chtype)str[iter]); // TODO Incompatible with utf8/wide characters
 			/*	char tmp[2];
 				tmp[0] = str[iter];
@@ -3153,9 +3154,13 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 	const uint32_t signature_len = protocols[p_iter].signature_len;
 	pthread_rwlock_unlock(&mutex_protocols); // 🟩
 	const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+	const uint8_t stat = getter_uint8(n,i,-1,offsetof(struct message_list,stat));
+	const uint8_t show_date = 1;
+	uint8_t show_nick = 0;
+	if(owner != ENUM_OWNER_CTRL || stat != ENUM_MESSAGE_RECV)
+		show_nick = 1; // show nick if group or if we sent it ("You")
 	if(owner == ENUM_OWNER_GROUP_PEER)
 	{
-		const uint8_t stat = getter_uint8(n,i,-1,offsetof(struct message_list,stat));
 		if(!group_pm && stat != ENUM_MESSAGE_RECV)
 			return lines; // Do not print OUTBOUND messages on GROUP_PEER unless they are private
 		const uint8_t status = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,status));
@@ -3164,10 +3169,54 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 	}
 	if(utf8 && null_terminated_len)
 	{
+		char *timebuffer = NULL;
+		char *peernick = NULL;
 		char *message = getter_string(n,i,-1,offsetof(struct message_list,message));
+		size_t peernick_len = 0; // including null byte
+		size_t timebuffer_len = 0; // including null byte
+		const size_t message_len = torx_allocation_len(message); // including null byte
 		if(!message) // this would be a bug?
 			return lines;
-		const size_t printable_len = torx_allocation_len(message) - null_terminated_len - date_len - signature_len;
+		if(show_date)
+		{
+			timebuffer = message_time_string(n,i);
+			timebuffer_len = torx_allocation_len(timebuffer);
+		}
+		if(show_nick)
+		{
+			if(stat == ENUM_MESSAGE_RECV)
+			{
+				peernick = getter_string(n,INT_MIN,-1,offsetof(struct peer_list,peernick));
+				peernick_len = torx_allocation_len(peernick);
+			}
+			else
+			{ // "You" sent it
+				peernick_len = strlen(text_you) + 1;
+				peernick = torx_insecure_malloc(peernick_len);
+				snprintf(peernick,peernick_len,"%s",text_you);
+			}
+		}
+		const size_t printable_len = timebuffer_len + peernick_len + message_len - null_terminated_len - date_len - signature_len;
+		if(show_date && show_nick)
+		{
+			message = torx_realloc_shift(message,message_len + timebuffer_len + peernick_len,1);
+			memcpy(message,timebuffer,timebuffer_len - 1);
+			message[timebuffer_len - 1] = ' '; // space after timebuffer
+			memcpy(&message[timebuffer_len],peernick,peernick_len - 1);
+			message[timebuffer_len + peernick_len - 1] = ' '; // space after peernick
+		}
+		else if(show_date)
+		{
+			message = torx_realloc_shift(message,message_len + timebuffer_len,1);
+			memcpy(message,timebuffer,timebuffer_len - 1);
+			message[timebuffer_len - 1] = ' '; // space after timebuffer
+		}
+		else if(show_nick)
+		{
+			message = torx_realloc_shift(message,message_len + peernick_len,1);
+			memcpy(message,peernick,peernick_len - 1);
+			message[peernick_len - 1] = ' '; // space after peernick
+		}
 		size_t anticipated_lines = 1 + print_wrapped(NULL,NULL,NULL,inner_width,message,printable_len);
 		if(win && ((anticipated_lines + processed_lines > must_be_processed_lines - height_of_scrollable) || must_be_processed_lines < height_of_scrollable))
 		{ // we are ACTUALLY printing
@@ -3201,12 +3250,25 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 			}
 			size_t fx = align_center(inner_width);
 			size_t fy = top_line + available_lines - anticipated_lines;
-			lines = 1 + required_offset + print_wrapped(win,&fy,&fx,inner_width,&message[offset],printable_len - offset - truncation);
+			size_t seperate_fy = fy, seperate_fx = fx;
+			if(group_pm) // Make PMs bold
+				wattron(win,A_BOLD); // bold on
+			lines = 1 + required_offset + print_wrapped(win,&fy,&fx,inner_width,&message[/*peernick_len + timebuffer_len + */offset],printable_len - offset - truncation/* - peernick_len - timebuffer_len*/);
+			if(group_pm) // Make PMs bold
+				wattroff(win,A_BOLD); // bold off
+			else if((show_date || show_nick) && offset < peernick_len + timebuffer_len)
+			{ // Re-printing over the date / peernick, in bold.
+				wattron(win,A_BOLD); // bold on
+				print_wrapped(win,&seperate_fy,&seperate_fx,inner_width,&message[offset],peernick_len + timebuffer_len);
+				wattroff(win,A_BOLD); // bold off
+			}
 		//	error_printf(0,"Checkpoint printed-lines: %lu out of anticipated: %lu into available: %lu in scrollable height: %lu chat_scroll_lines: %lu processed: %lu must-be: %lu msg: %s",lines,anticipated_lines,available_lines,height_of_scrollable,chat_scroll_lines,processed_lines,must_be_processed_lines,&message[offset]);
 		}
 		else // not actually printing
 			lines = anticipated_lines;
 		torx_free((void*)&message);
+		torx_free((void*)&timebuffer);
+		torx_free((void*)&peernick);
 	}
 	return lines;
 }
