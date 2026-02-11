@@ -975,11 +975,11 @@ static int keypress(const int w, const int ch)
 	{
 		if(window_chat && *current_focus == (int)widgets_existing_before_scrollable)
 			*current_focus = (int)(torx_allocation_len(widget) / sizeof(struct widget)) - 1; // skip to last widget (latest message -> unsent)
-		else if(current_scroll_offset && *current_focus == (int)(torx_allocation_len(widget) / sizeof(struct widget)) - 1 && more_to_print)
+		else if(current_scroll_offset && *current_focus + 1 == (int)(torx_allocation_len(widget) / sizeof(struct widget)) && more_to_print)
 			*current_scroll_offset = *current_scroll_offset + 1; // At end, need to move down, without current_focus
 		else
 		{ // DO NOT MODIFY
-			if(current_scroll_offset && widgets_existing_before_scrollable && *current_focus == (int)widgets_existing_before_scrollable - 1)
+			if(current_scroll_offset && widgets_existing_before_scrollable && *current_focus + 1 == (int)widgets_existing_before_scrollable)
 				*current_scroll_offset = 0; // NOTE: Scroll offset, NOT focus. Optional jump to start of scrollable.
 			if(*current_focus + 1 ==  (int)(torx_allocation_len(widget) / sizeof(struct widget)))
 			{ // NOT else if
@@ -1039,12 +1039,12 @@ static int keypress(const int w, const int ch)
 		up: {}
 		if((widget[w].type == WIDGET_INPUT_MULTI_LINE || widget[w].type == WIDGET_OUTPUT_MULTI_LINE) && widget[w].text && torx_allocation_len(*widget[w].text) > 1)
 			return move_cursor_up(w);
-		else if(!goneto && window_chat && *current_focus == (int)(torx_allocation_len(widget) / sizeof(struct widget) - 1))
+		else if(!goneto && window_chat && *current_focus + 1 == (int)(torx_allocation_len(widget) / sizeof(struct widget)))
 		{
 			*current_focus = (int)widgets_existing_before_scrollable;
 			return 1;
 		}
-		else if(!goneto && window_chat && *current_focus < (int)(torx_allocation_len(widget) / sizeof(struct widget) - 1) && *current_focus >= (int)widgets_existing_before_scrollable)
+		else if(!goneto && window_chat && *current_focus + 1 < (int)(torx_allocation_len(widget) / sizeof(struct widget)) && *current_focus >= (int)widgets_existing_before_scrollable)
 		{
 			if(*current_focus == (int)(torx_allocation_len(widget) / sizeof(struct widget) - 2))
 			{ // Go from oldest visible message to top bar
@@ -1065,7 +1065,7 @@ static int keypress(const int w, const int ch)
 		down: {}
 		if((widget[w].type == WIDGET_INPUT_MULTI_LINE || widget[w].type == WIDGET_OUTPUT_MULTI_LINE) && widget[w].text && torx_allocation_len(*widget[w].text) > 1)
 			return move_cursor_down(w);
-		else if(!goneto && window_chat && *current_focus < (int)(torx_allocation_len(widget) / sizeof(struct widget) - 1) && *current_focus >= (int)widgets_existing_before_scrollable)
+		else if(!goneto && window_chat && *current_focus + 1 < (int)(torx_allocation_len(widget) / sizeof(struct widget)) && *current_focus >= (int)widgets_existing_before_scrollable)
 		{
 			if(*current_focus == (int)widgets_existing_before_scrollable)
 			{ // Go from latest message to unsent
@@ -1075,7 +1075,7 @@ static int keypress(const int w, const int ch)
 			goneto = 1;
 			goto up;
 		}
-		else if(*current_focus < (int)(torx_allocation_len(widget) / sizeof(struct widget) - 1))
+		else if(*current_focus + 1 < (int)(torx_allocation_len(widget) / sizeof(struct widget)))
 			*current_focus = *current_focus + 1;
 		else if(more_to_print && current_scroll_offset)
 			*current_scroll_offset = *current_scroll_offset + 1;
@@ -2583,7 +2583,7 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 	}
 	if(*fyp > screen_rows - 2) // Draw border again (if we ran over it with scrollable)
 	{ // DO NOT MODIFY
-		if(torx_allocation_len(widget) / sizeof(struct widget) - widgets_existing_before_scrollable > 1 && *focus == (int)(torx_allocation_len(widget) / sizeof(struct widget) - 1))
+		if(torx_allocation_len(widget) / sizeof(struct widget) - widgets_existing_before_scrollable > 1 && *focus + 1 == (int)(torx_allocation_len(widget) / sizeof(struct widget)))
 		{ // VERY IMPORTANT. Do not modify! When (scrollable widgets > 1 && current focus is on a partially printed widget)
 			*focus = *focus - 1;
 			*scroll_offset = *scroll_offset + 1;
@@ -2591,7 +2591,7 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 			return; // safety
 		}
 		else
-			for(size_t x = 1; x < screen_cols - 1; x++)
+			for(size_t x = 1; x + 1 < screen_cols; x++)
 				mvwaddch(win, (int)screen_rows-1, (int)x, ACS_HLINE);
 	}
 }
@@ -3400,7 +3400,7 @@ static void draw_chat(void)
 
 	// Draw horizontal divider
 	const size_t mid = visual_lines + 2 + TOP_LINE_HEIGHT >= screen_rows ? TOP_LINE_HEIGHT : screen_rows - visual_lines - 2;
-	for(size_t x = 1; x < screen_cols - 1; x++)
+	for(size_t x = 1; x + 1 < screen_cols; x++)
 		mvwaddch(win, (int)mid, (int)x, ACS_HLINE);
 	// Draw intersection characters
 	mvwaddch(win, (int)mid, 0, ACS_LTEE);
@@ -3535,7 +3535,7 @@ static inline void shift_or_append(char **destination,char **source,size_t *curs
 		const size_t former_len = torx_allocation_len(*destination);
 		*destination = torx_realloc(*destination,former_len + torx_allocation_len(*source) - 1); // cut off one null pointer
 		memcpy(&(*destination)[former_len-1],*source,torx_allocation_len(*source));
-		if(*cursor_p == former_len - 1)
+		if(*cursor_p + 1 == former_len)
 			*cursor_p = torx_allocation_len(*destination) - 1; // Set at end
 	}
 }
