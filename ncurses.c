@@ -1054,6 +1054,11 @@ static int keypress(const int w, const int ch)
 			*widget[w].cursor = *widget[w].cursor - 1;
 			return 1; // Rebuild
 		}
+		else if(window_contacts && *current_focus < (int)widgets_existing_before_scrollable)
+		{ // Specifically for contacts page
+			*current_focus = (int)widgets_existing_before_scrollable;
+			return 1;
+		}
 		else if(*current_focus < (int)widgets_existing_before_scrollable)
 		{
 			*current_focus = *current_focus + 1;
@@ -3180,6 +3185,8 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 		if(show_date)
 		{
 			timebuffer = message_time_string(n,i);
+			timebuffer = torx_realloc(timebuffer,torx_allocation_len(timebuffer)-3); // Slice off seconds
+			timebuffer[torx_allocation_len(timebuffer)-1] = '\0';
 			timebuffer_len = torx_allocation_len(timebuffer);
 		}
 		if(show_nick)
@@ -3251,6 +3258,10 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 			size_t fx = align_center(inner_width);
 			size_t fy = top_line + available_lines - anticipated_lines;
 			size_t seperate_fy = fy, seperate_fx = fx;
+// XXX experimental	const int w = widget_new(WIDGET_CHECKBOX,inner_width);
+// XXX experimental	widget[w].callback = NULL; // TODO
+// XXX experimental	if(*current_focus == w)
+// XXX experimental		toggle_highlight(win); // highlight on
 			if(group_pm) // Make PMs bold
 				wattron(win,A_BOLD); // bold on
 			lines = 1 + required_offset + print_wrapped(win,&fy,&fx,inner_width,&message[/*peernick_len + timebuffer_len + */offset],printable_len - offset - truncation/* - peernick_len - timebuffer_len*/);
@@ -3262,6 +3273,8 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 				print_wrapped(win,&seperate_fy,&seperate_fx,inner_width,&message[offset],peernick_len + timebuffer_len);
 				wattroff(win,A_BOLD); // bold off
 			}
+// XXX experimental	if(*current_focus == w)
+// XXX experimental		toggle_highlight(win); // highlight off
 		//	error_printf(0,"Checkpoint printed-lines: %lu out of anticipated: %lu into available: %lu in scrollable height: %lu chat_scroll_lines: %lu processed: %lu must-be: %lu msg: %s",lines,anticipated_lines,available_lines,height_of_scrollable,chat_scroll_lines,processed_lines,must_be_processed_lines,&message[offset]);
 		}
 		else // not actually printing
@@ -3405,7 +3418,7 @@ static void draw_chat(void)
 	reprint: {}
 	if(reprinted)
 	{ // Clear what we already printed. This is ONLY triggered when we scroll ALL the way to the top.
-		chat_scroll_lines = chat_scroll_max - chat_scroll_jump;
+		chat_scroll_lines = chat_scroll_max > chat_scroll_jump ? chat_scroll_max - chat_scroll_jump : 0;
 		const size_t edge = (screen_cols - inner_width)/2;
 		for(size_t y = 0; y < chat_scroll_jump; y++)
 			for(size_t x = 0; x < inner_width; x++)
