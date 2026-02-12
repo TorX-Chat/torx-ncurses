@@ -680,7 +680,9 @@ static int widget_text(WINDOW *win,size_t *y,size_t *x,const size_t max_height,c
 		return 0;
 	}
 	const size_t start_y = *y, start_x = *x;
-	const size_t text_len = (text_p && *text_p) ? strlen(*text_p) : 0;
+	size_t text_len = (text_p && *text_p) ? strlen(*text_p) : 0;
+	if(WIDGET_OUTPUT_MULTI_LINE && text_len && (*text_p)[text_len-1] == '\n')
+		text_len--; // strip trailing newline on outputs
 	if(cursor_pos && *cursor_pos > text_len)
 		*cursor_pos = text_len; // Necesary to mitigate bugs
 	const int w = widget_new(type,max_width);
@@ -3184,7 +3186,7 @@ static void draw_contacts(void)
 
 static int callback_message(const int w)
 {
-	error_printf(0,"Checkpoint widget=%d",w);
+	error_printf(0,"Checkpoint widget=%d n=? i=?",w); // TODO load n/i into widget. A void* is an option with iitovp/vptoii
 	return 0; // Do not rebuild
 //	return 1; // Rebuild
 }
@@ -3198,6 +3200,7 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 	pthread_rwlock_rdlock(&mutex_protocols); // 🟧
 	const uint8_t utf8 = protocols[p_iter].utf8;
 	const uint8_t group_pm = protocols[p_iter].group_pm;
+	const uint16_t protocol = protocols[p_iter].protocol;
 	const uint32_t null_terminated_len = protocols[p_iter].null_terminated_len;
 	const uint32_t date_len = protocols[p_iter].date_len;
 	const uint32_t signature_len = protocols[p_iter].signature_len;
@@ -3216,15 +3219,15 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 		if(stat == ENUM_MESSAGE_RECV && (t_peer[n].mute || status == ENUM_STATUS_BLOCKED))
 			return lines; // Do not print inbound messages from muted (ignored) or blocked group peers
 	}
-	if(utf8 && null_terminated_len)
+	if((utf8 && null_terminated_len) || protocol == ENUM_PROTOCOL_GROUP_OFFER || protocol == ENUM_PROTOCOL_GROUP_OFFER_FIRST)
 	{
 		char *timebuffer = NULL;
 		char *peernick = NULL;
-		char *message = getter_string(n,i,-1,offsetof(struct message_list,message));
+		char *message = utf8 && null_terminated_len ? getter_string(n,i,-1,offsetof(struct message_list,message)) : NULL;
 		size_t peernick_len = 0; // including null byte
 		size_t timebuffer_len = 0; // including null byte
-		const size_t message_len = torx_allocation_len(message); // including null byte
-		if(!message) // this would be a bug?
+		size_t message_len = torx_allocation_len(message); // including null byte
+		if(!message && utf8 && null_terminated_len) // this would be a bug?
 			return lines;
 		if(show_date)
 		{
@@ -3247,7 +3250,35 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 				snprintf(peernick,peernick_len,"%s",text_you);
 			}
 		}
-		const size_t printable_len = timebuffer_len + peernick_len + message_len - null_terminated_len - date_len - signature_len;
+		size_t printable_len;
+		if(protocol == ENUM_PROTOCOL_GROUP_OFFER || protocol == ENUM_PROTOCOL_GROUP_OFFER_FIRST)
+		{ // TODO consider highlighting message to enhance visibility and prevent pointless spoofing
+			uint32_t untrusted_peercount;
+			const int g = set_g_from_i(&untrusted_peercount,n,i);
+			const int group_n = getter_group_int(g,offsetof(struct group_list,n));
+			const uint32_t g_peercount = getter_group_uint32(g,offsetof(struct group_list,peercount));
+			const uint8_t g_invite_required = getter_group_uint8(g,offsetof(struct group_list,invite_required));
+			const uint32_t peercount = untrusted_peercount > g_peercount ? untrusted_peercount : g_peercount; // use whatever is higher
+			char *g_peernick = group_n > -1 ? getter_string(group_n,INT_MIN,-1,offsetof(struct peer_list,peernick)) : NULL;
+			if(!g_peernick)
+			{ // We have not joined yet, so no name. Use encoded GroupID instead
+				unsigned char id[GROUP_ID_SIZE]; // zero'd
+				pthread_rwlock_rdlock(&mutex_expand_group); // 🟧
+				memcpy(id,group[g].id,sizeof(id));
+				pthread_rwlock_unlock(&mutex_expand_group); // 🟩
+				g_peernick = b64_encode(id,GROUP_ID_SIZE);
+				sodium_memzero(id,sizeof(id));
+			}
+			printable_len = (size_t)snprintf(NULL,0,"%s %s: %u %s",g_invite_required ? text_group_private : text_group_public,text_current_members,peercount,g_peernick); // must be same as below
+			message_len = printable_len + 1;
+			message = torx_secure_malloc(message_len);
+			snprintf(message,message_len,"%s %s: %u %s",g_invite_required ? text_group_private : text_group_public,text_current_members,peercount,g_peernick); // must be same as above
+error_printf(0,"Checkpoint peernick=%s message=%s",g_peernick,message);
+			torx_free((void*)&g_peernick);
+		}
+		else
+			printable_len = message_len - null_terminated_len - date_len - signature_len;
+		printable_len += timebuffer_len + peernick_len;
 		if(show_date && show_nick)
 		{
 			message = torx_realloc_shift(message,message_len + timebuffer_len + peernick_len,1);
