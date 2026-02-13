@@ -490,9 +490,6 @@ static const char *text_invite_friend = {0};  // unused in GTK
 static const char *text_group_peers = {0}; // unused in GTK
 static const char *text_incoming_call = {0};
 
-#define wmove_size(win, y, x) wmove(win, (int)(y), (int)(x))
-#define newwin_size(nlines, ncols, begin_y, begin_x) newwin((int)(nlines), (int)(ncols), (int)(begin_y), (int)(begin_x))
-
 static inline size_t align_right(size_t length)
 { // WARNING: Use torx_utf8len not strlen
 	if(length > screen_cols)
@@ -529,10 +526,8 @@ static inline size_t torx_utf8len(const char *str)
 	return total;
 }
 
-#define mvwprintw_size(win, y, x, ...) mvwprintw(win, (int)(y), (int)(x), __VA_ARGS__)
-
-static inline size_t print_wrapped(WINDOW *win,size_t *y,size_t *x,const size_t max_width,const char *str,const size_t len)
-{ // NOTE: y and x must be initialized // TODO eliminate mvwprintw_size, except where wrapping is not desired
+static inline size_t print_internal(WINDOW *win,size_t *y,size_t *x,const size_t max_width,const uint8_t wrap,const char *str,const size_t len)
+{ // WARNING: Pass bytes len (strlen) NOT utf8len // NOTE: y and x must be initialized
 	if(max_width && str && len)
 	{
 		const uint8_t printing = (win && y && x) ? 1 : 0;
@@ -549,6 +544,8 @@ static inline size_t print_wrapped(WINDOW *win,size_t *y,size_t *x,const size_t 
 			}
 			if(str[iter] == '\n' || offset_x + (size_t)print_width > max_width)
 			{
+				if(!wrap)
+					break; // Can't print more without wrapping
 				offset_y++;
 				offset_x = 0;
 				if(str[iter] == '\n')
@@ -561,7 +558,7 @@ static inline size_t print_wrapped(WINDOW *win,size_t *y,size_t *x,const size_t 
 			{
 				cchar_t ch;
 				setcchar(&ch, &wc, A_NORMAL, 0, NULL);
-				mvwadd_wch(win, (int)(*y + offset_y), (int)(*x + offset_x), &ch);
+				mvwadd_wch(win, (int)(*y + offset_y), (int)(*x + offset_x), &ch); // TODO perhaps use mvwadd_wstr or mvwaddnwstr for better efficiency?
 			}
 			offset_x += (size_t)print_width; // Note: +=print_width is because not all wide characters take only one column
 			iter += num_bytes;
@@ -578,6 +575,16 @@ static inline size_t print_wrapped(WINDOW *win,size_t *y,size_t *x,const size_t 
 		return offset_y; // may be 0 if no wraps or newlines occurred during printing
 	}
 	return 0; // Do not throw error, probably just len is 0
+}
+
+static inline size_t print_wrapped(WINDOW *win,size_t *y,size_t *x,const size_t max_width,const char *str,const size_t len)
+{ // WARNING: Pass bytes len (strlen) NOT utf8len
+	return print_internal(win,y,x,max_width,1,str,len);
+}
+
+static inline size_t print_nowrap(WINDOW *win,size_t *y,size_t *x,const size_t max_width,const char *str,const size_t len)
+{ // WARNING: Pass bytes len (strlen) NOT utf8len
+	return print_internal(win,y,x,max_width,0,str,len);
 }
 
 static inline void getmaxyx_size(WINDOW *win,size_t *vertical,size_t *horizontal)
@@ -662,9 +669,12 @@ static void widget_clear(int *new_focus)
 
 static void widget_draw_cursor(WINDOW *win)
 { // Must call last when drawing a new route, after drawing the last widget, or when re-drawing a text widget alone.
-	if(*current_focus < 0)
-		*current_focus = 0; // must set to a valid w if unset or keypress will error out
-	wmove_size(win, cursor[0], cursor[1]);
+	const int active_widgets = (int)(torx_allocation_len(widget) / sizeof(struct widget));
+	if(active_widgets == 0 && *current_focus > -1)
+		*current_focus = -1; // Unsetting widget_next_has_default_focus if we have no widgets
+	else if(*current_focus < 0)
+		*current_focus = 0; // There are widgets but widget_next_has_default_focus wasn't called, so default to 0
+	wmove(win, (int)cursor[0], (int)cursor[1]);
 	wrefresh(win);
 }
 
@@ -865,14 +875,14 @@ static WINDOW *window_prepare(void (*caller)(void),WINDOW **win_p,int *new_focus
 	more_to_print = 0; // reset
 	window_current = win_p;
 	redraw = caller;
-	*win_p = newwin_size(screen_rows, screen_cols, 0, 0);
+	*win_p = newwin((int)screen_rows,(int)screen_cols, 0, 0);
 	if(global_theme == LIGHT_THEME)
 	{
 		wattron(*win_p, A_REVERSE); // highlight on (do not use toggle_highlight here)
 		highlight_active = 1;
 		for(size_t y = 0; y < screen_rows; y++)
 			for(size_t x = 0; x < screen_cols; x++)
-				mvwaddch(*win_p, (int)y, (int)x, (chtype)' ');
+				mvwaddch(*win_p, (int)y, (int)x, (chtype)' '); // Cannot use erase() because that breaks light mode
 	}
 	box(*win_p,0,0); // Draw border
 	return *win_p;
@@ -996,7 +1006,7 @@ static int keypress(const int w, const int ch)
 		if(w > 0)
 			error_printf(0,"Keypress called on possibly invalid widget: %lu of %lu",w,torx_allocation_len(widget) / sizeof(struct widget));
 		else
-			error_simple(0,"There are no widgets. Going back.");
+			error_printf(0,"There are no widgets: %d. Going back.",w);
 		go_back(1);
 		return 0; // Sanity check
 	}
@@ -1246,7 +1256,7 @@ static void draw_login(void)
 
 	size_t fy = 0, fx = 2;
 	wattron(win,A_BOLD); // bold on
-	print_wrapped(win,&fy,&fx,screen_cols-(fx*2),text_welcome,strlen(text_welcome));
+	print_nowrap(win,&fy,&fx,screen_cols-(fx*2),text_welcome,strlen(text_welcome));
 	wattroff(win,A_BOLD); // bold off
 
 //	fy = screen_rows-2, fx = 2; // Drawing bottom first because it is less important
@@ -2426,7 +2436,7 @@ static void draw_requests_popover(void)
 
 	size_t fy = 0,fx = 2;
 	wattron(win,A_BOLD); // bold on
-	mvwprintw_size(win,fy,fx,"%s",text_edit); // do not wrap
+	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_edit,strlen(text_edit));
 	wattroff(win,A_BOLD); // bold off
 
 	draw_scrollable(win,&fy,&fx,&focus_popover,&popover_scroll_offset);
@@ -2441,7 +2451,7 @@ static void draw_ids_popover(void)
 
 	size_t fy = 0,fx = 2;
 	wattron(win,A_BOLD); // bold on
-	mvwprintw_size(win,fy,fx,"%s",text_edit); // do not wrap
+	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_edit,strlen(text_edit));
 	wattroff(win,A_BOLD); // bold off
 
 	draw_scrollable(win,&fy,&fx,&focus_popover,&popover_scroll_offset);
@@ -2650,7 +2660,7 @@ static void draw_settings(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	mvwprintw_size(win,fy,fx,"%s",text_settings); // do not wrap
+	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_settings,strlen(text_settings));
 	wattroff(win,A_BOLD); // bold off
 
 	char label[256];
@@ -2710,7 +2720,7 @@ static void draw_logs(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	mvwprintw_size(win,fy,fx,"%s",tor_log_mode ? text_tor_log : text_torx_log); // do not wrap
+	print_nowrap(win,&fy,&fx,screen_cols-(2*2),tor_log_mode ? text_tor_log : text_torx_log,strlen(tor_log_mode ? text_tor_log : text_torx_log));
 	wattroff(win,A_BOLD); // bold off
 
 	char label[256];
@@ -2722,7 +2732,7 @@ static void draw_logs(void)
 	if(!tor_log_mode)
 	{ // TorX logging level
 		fy -= 1, fx = align_right(utf8len) - 1 - torx_utf8len(text_debug_level) - 2;
-		print_wrapped(win,&fy,&fx,screen_cols-(2*2),text_debug_level,strlen(text_debug_level));
+		print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_debug_level,strlen(text_debug_level));
 		fx = align_right(utf8len) - 2;
 		widget_text(win,&fy,&fx,screen_rows - 2,inner_width,callback_debug_level,WIDGET_INPUT_NUMERICAL,&tmp_debug_level,&tmp_debug_level_pos);
 		fy += 1;
@@ -2756,7 +2766,7 @@ static void draw_torrc(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	mvwprintw_size(win,fy,fx,"%s",text_edit_torrc); // do not wrap
+	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_edit_torrc,strlen(text_edit_torrc));
 	wattroff(win,A_BOLD); // bold off
 
 	char label[256];
@@ -2781,7 +2791,7 @@ static void draw_change_password(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	mvwprintw_size(win,fy,fx,"%s",text_change_password); // do not wrap
+	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_change_password,strlen(text_change_password));
 	wattroff(win,A_BOLD); // bold off
 
 	draw_scrollable(win,&fy,&fx,&focus_change_password,&change_password_scroll_offset);
@@ -2809,7 +2819,7 @@ static void draw_generate(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	mvwprintw_size(win,fy,fx,"%s",generate_group_mode ? text_group : text_add_generate); // do not wrap
+	print_nowrap(win,&fy,&fx,screen_cols-(2*2),generate_group_mode ? text_group : text_add_generate,strlen(generate_group_mode ? text_group : text_add_generate));
 	wattroff(win,A_BOLD); // bold off
 
 	char label[256];
@@ -2841,7 +2851,7 @@ static void draw_global_kill(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	mvwprintw_size(win,fy,fx,"%s",text_global_kill); // do not wrap
+	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_global_kill,strlen(text_global_kill));
 	wattroff(win,A_BOLD); // bold off
 
 	size_t label_len = strlen(text_global_kill_warning);
@@ -2880,7 +2890,7 @@ static void draw_chat_actions(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	mvwprintw_size(win,fy,fx,"%s",text_actions); // do not wrap
+	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_actions,strlen(text_actions));
 	wattroff(win,A_BOLD); // bold off
 
 	fy += 2, fx = 2;
@@ -2929,7 +2939,7 @@ static void draw_chat_settings(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	mvwprintw_size(win,fy,fx,"%s",text_settings); // do not wrap
+	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_settings,strlen(text_settings));
 	wattroff(win,A_BOLD); // bold off
 
 	draw_scrollable(win,&fy,&fx,&focus_chat_settings,&chat_settings_scroll_offset);
@@ -2945,11 +2955,14 @@ static void draw_group_invite(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	mvwprintw_size(win,fy,fx,"%s",text_invite_friend); // do not wrap
+	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_invite_friend,strlen(text_invite_friend));
 	wattroff(win,A_BOLD); // bold off
 
 	if(search)
-		mvwprintw_size(win,0,align_right(torx_utf8len(search)),"%s",search); // do not wrap
+	{
+		fy = 0,fx = align_right(torx_utf8len(search));
+		print_nowrap(win,&fy,&fx,screen_cols-(fx+2),search,strlen(search));
+	}
 
 	draw_scrollable(win,&fy,&fx,&focus_group_invite,&group_invite_scroll_offset);
 
@@ -2964,11 +2977,14 @@ static void draw_group_peerlist(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	mvwprintw_size(win,fy,fx,"%s",text_group_peers); // do not wrap
+	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_group_peers,strlen(text_group_peers));
 	wattroff(win,A_BOLD); // bold off
 
 	if(search)
-		mvwprintw_size(win,0,align_right(torx_utf8len(search)),"%s",search); // do not wrap
+	{
+		fx = align_right(torx_utf8len(search));
+		print_nowrap(win,&fy,&fx,screen_cols-(fx+2),search,strlen(search));
+	}
 
 	draw_scrollable(win,&fy,&fx,&focus_group_peerlist,&group_peerlist_scroll_offset);
 
@@ -3043,7 +3059,7 @@ static void draw_requests(void)
 
 	size_t fy = 0,fx = 2;
 	wattron(win,A_BOLD); // bold on
-	mvwprintw_size(win,fy,fx,"%s",outgoing_mode ? text_outgoing : text_incoming); // do not wrap
+	print_nowrap(win,&fy,&fx,screen_cols-(2*2),outgoing_mode ? text_outgoing : text_incoming,strlen(outgoing_mode ? text_outgoing : text_incoming));
 	wattroff(win,A_BOLD); // bold off
 
 	char label[256];
@@ -3053,7 +3069,10 @@ static void draw_requests(void)
 	widget_button(win,&fy,&fx,utf8len,callback_toggle_requests,label);
 
 	if(search)
-		mvwprintw_size(win,0,align_right(torx_utf8len(search) + 1 + utf8len),"%s",search); // do not wrap
+	{
+		fy = 0,fx = align_right(torx_utf8len(search) + 1 + utf8len);
+		print_nowrap(win,&fy,&fx,screen_cols-(fx+2),search,strlen(search));
+	}
 
 	const size_t label_len = (size_t)snprintf(label,sizeof(label),"%s %s",text_identifier, threadsafe_read_uint8(&mutex_global_variable,&shorten_torxids) ? text_torxid : text_onionid);
 	fx = 2;
@@ -3079,7 +3098,7 @@ static void draw_ids(void)
 
 	size_t fy = 0,fx = 2;
 	wattron(win,A_BOLD); // bold on
-	mvwprintw_size(win,fy,fx,"%s",single_mode ? text_active_sing : text_active_mult); // do not wrap
+	print_nowrap(win,&fy,&fx,screen_cols-(2*2),single_mode ? text_active_sing : text_active_mult,strlen(single_mode ? text_active_sing : text_active_mult));
 	wattroff(win,A_BOLD); // bold off
 
 	char label[256];
@@ -3089,7 +3108,10 @@ static void draw_ids(void)
 	widget_button(win,&fy,&fx,utf8len,callback_toggle_ids,label);
 
 	if(search)
-		mvwprintw_size(win,0,align_right(torx_utf8len(search) + 1 + utf8len),"%s",search); // do not wrap
+	{
+		fy = 0,fx = align_right(torx_utf8len(search) + 1 + utf8len);
+		print_nowrap(win,&fy,&fx,screen_cols-(fx+2),search,strlen(search));
+	}
 
 	const size_t label_len = (size_t)snprintf(label,sizeof(label),"%s %s %s",text_active,text_identifier, threadsafe_read_uint8(&mutex_global_variable,&shorten_torxids) ? text_torxid : text_onionid);
 	fx = 2;
@@ -3159,13 +3181,14 @@ static void draw_contacts(void)
 	WINDOW *win = window_prepare(&draw_contacts,&window_contacts,&focus_contacts); // XXX Must do first
 	widget_next_has_default_focus(); // XXX Set default widget focus
 
+	size_t fy = 0,fx = 2;
 	wattron(win,A_BOLD); // bold on
 	if(groups_mode == ENUM_SHOW_PEER)
-		mvwprintw_size(win,0,2,"%s",text_peer); // do not wrap
+		print_nowrap(win,&fy,&fx,screen_cols-(fx*2),text_peer,strlen(text_peer));
 	else if(groups_mode == ENUM_SHOW_GROUP)
-		mvwprintw_size(win,0,2,"%s",text_group); // do not wrap
+		print_nowrap(win,&fy,&fx,screen_cols-(fx*2),text_group,strlen(text_group));
 	else if(groups_mode == ENUM_SHOW_BLOCK)
-		mvwprintw_size(win,0,2,"%s",text_block); // do not wrap
+		print_nowrap(win,&fy,&fx,screen_cols-(fx*2),text_block,strlen(text_block));
 	wattroff(win,A_BOLD); // bold off
 
 	char label[256];
@@ -3178,11 +3201,15 @@ static void draw_contacts(void)
 		selected = text_block;
 	snprintf(label,sizeof(label),"[ %s ]",selected);
 	size_t utf8len = torx_utf8len(label);
-	size_t fy = 0,fx = align_right(utf8len);
+	fy = 0,fx = align_right(utf8len);
 	widget_button(win,&fy,&fx,utf8len,callback_contacts_groups,label);
 
 	if(search)
-		mvwprintw_size(win,0,align_right(torx_utf8len(search) + 1 + utf8len),"%s",search); // do not wrap
+	{
+		fy = 0,fx = align_right(torx_utf8len(search) + 1 + utf8len);
+		print_nowrap(win,&fy,&fx,screen_cols-(fx+2),search,strlen(search));
+		fy += 1;
+	}
 
 	snprintf(label,sizeof(label),"[ %s ]",text_add_or_generate);
 	utf8len = torx_utf8len(label);
@@ -3313,7 +3340,6 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 			message_len = printable_len + 1;
 			message = torx_secure_malloc(message_len);
 			snprintf(message,message_len,"%s %s: %u %s",g_invite_required ? text_group_private : text_group_public,text_current_members,peercount,g_peernick); // must be same as above
-error_printf(0,"Checkpoint peernick=%s message=%s",g_peernick,message);
 			torx_free((void*)&g_peernick);
 		}
 		else
@@ -3477,25 +3503,26 @@ static void draw_chat(void)
 	mvwaddch(win, (int)mid, 0, ACS_LTEE);
 	mvwaddch(win, (int)mid, (int)screen_cols-1, ACS_RTEE);
 
-	size_t fy = 0,fx = 2;
+	size_t fy = mid,fx = 2;
 	if(t_peer[n].pm_n > -1)
 	{
 		char *peernick = getter_string(t_peer[n].pm_n,INT_MIN,-1,offsetof(struct peer_list,peernick));
 		char cancel_message[256]; // zero'd
 		snprintf(cancel_message,sizeof(cancel_message),"%s %s",text_private_messaging,peernick);
 		torx_free((void*)&peernick);
-		mvwprintw_size(win, mid, fx, "%s", cancel_message); // do not wrap
+		print_nowrap(win,&fy,&fx,screen_cols-(2*2),cancel_message,strlen(cancel_message));
 		sodium_memzero(cancel_message,sizeof(cancel_message));
 	}
 	else if(t_peer[n].edit_n > -1)
-		mvwprintw_size(win, mid, fx, "%s", text_cancel_editing); // do not wrap
+		print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_cancel_editing,strlen(text_cancel_editing));
 	else
-		mvwprintw_size(win, mid, fx, "%s", text_navigation_chat); // do not wrap
+		print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_navigation_chat,strlen(text_navigation_chat));
 
 	// Draw top line widgets
 	char *peernick = getter_string(n,INT_MIN,-1,offsetof(struct peer_list,peernick));
 	wattron(win,A_BOLD); // bold on
-	mvwprintw_size(win,fy,fx,"%s",peernick); // do not wrap
+	fy = 0,fx = 2;
+	print_nowrap(win,&fy,&fx,screen_cols-(2*2),peernick,strlen(peernick));
 	wattroff(win,A_BOLD); // bold off
 	torx_free((void*)&peernick);
 
