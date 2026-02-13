@@ -1001,12 +1001,9 @@ static void go_back(size_t motions)
 
 static int keypress(const int w, const int ch)
 {
-	if(w < 0 || w >= (int)(torx_allocation_len(widget) / sizeof(struct widget)))
+	if(w >= (int)(torx_allocation_len(widget) / sizeof(struct widget)))
 	{ // XXX Due to zero indexing, it will likely show "10 of 10" which is indeed an error.
-		if(w > 0)
-			error_printf(0,"Keypress called on possibly invalid widget: %lu of %lu",w,torx_allocation_len(widget) / sizeof(struct widget));
-		else
-			error_printf(0,"There are no widgets: %d. Going back.",w);
+		error_printf(0,"Keypress called on possibly invalid widget: %lu of %lu",w,torx_allocation_len(widget) / sizeof(struct widget));
 		go_back(1);
 		return 0; // Sanity check
 	}
@@ -1014,7 +1011,7 @@ static int keypress(const int w, const int ch)
 	const size_t max_height = screen_rows - 3; // TODO this should be specific to each page
 	if(ch == KEY_ESC || ch == KEY_HOME)
 		go_back(1);
-	else if(ch == '\t' || ch == KEY_BTAB)
+	else if(w > - 1 && (ch == '\t' || ch == KEY_BTAB))
 	{
 		if(window_chat && *current_focus == (int)widgets_existing_before_scrollable)
 			*current_focus = (int)(torx_allocation_len(widget) / sizeof(struct widget)) - 1; // skip to last widget (latest message -> unsent)
@@ -1035,7 +1032,7 @@ static int keypress(const int w, const int ch)
 		}
 		return 1; // Rebuild
 	}
-	else if((ch == KEY_PPAGE || ch == KEY_NPAGE || ch == KEY_END) && (widget[w].type == WIDGET_INPUT_MULTI_LINE || widget[w].type == WIDGET_OUTPUT_MULTI_LINE) && 1 + print_wrap(NULL, NULL, NULL, widget[w].max_width, *widget[w].text, torx_allocation_len(*widget[w].text) - 1) >= max_height)
+	else if(w > - 1 && (ch == KEY_PPAGE || ch == KEY_NPAGE || ch == KEY_END) && (widget[w].type == WIDGET_INPUT_MULTI_LINE || widget[w].type == WIDGET_OUTPUT_MULTI_LINE) && 1 + print_wrap(NULL, NULL, NULL, widget[w].max_width, *widget[w].text, torx_allocation_len(*widget[w].text) - 1) >= max_height)
 	{ // PgUp / PgDwn (NOTE: Not just handled here)
 		if(ch == KEY_PPAGE)
 		{
@@ -1053,12 +1050,12 @@ static int keypress(const int w, const int ch)
 			*widget[w].cursor = torx_allocation_len(*widget[w].text) - 1;
 		return 1;
 	}
-	else if(window_chat && ch == KEY_PPAGE && !chat_scroll_max)
+	else if(w > - 1 && window_chat && ch == KEY_PPAGE && !chat_scroll_max)
 	{ // PgUp
 		chat_scroll_lines += chat_scroll_jump;
 		return 1;
 	}
-	else if(window_chat && ch == KEY_NPAGE && chat_scroll_lines > 0)
+	else if(w > - 1 && window_chat && ch == KEY_NPAGE && chat_scroll_lines > 0)
 	{ // PgDn
 		if(chat_scroll_lines > chat_scroll_jump)
 			chat_scroll_lines -= chat_scroll_jump;
@@ -1066,18 +1063,18 @@ static int keypress(const int w, const int ch)
 			chat_scroll_lines = 0;
 		return 1;
 	}
-	else if(window_chat && ch == KEY_END)
+	else if(w > - 1 && window_chat && ch == KEY_END)
 	{
 		chat_scroll_lines = 0;
 		return 1;
 	}
-	else if(ch == KEY_END)
+	else if(w > - 1 && ch == KEY_END)
 	{ // Targets single lines entries. Must go AFTER prior usage in window_chat and MULTI_LINE.
 		*widget[w].cursor = torx_allocation_len(*widget[w].text) - 1;
 		return 1;
 	}
 	// TODO If not too difficult, scroll widgets HERE. Have some KEY_PPAGE KEY_NPAGE KEY_END usages here that act upon current_scroll and current_scroll_offset. Scrolling DOWN may be harder because we cannot predict how many widgets we can scroll.
-	else if(ch == KEY_UP)
+	else if(w > - 1 && ch == KEY_UP)
 	{ // DO NOT MODIFY
 		up: {}
 		if((widget[w].type == WIDGET_INPUT_MULTI_LINE || widget[w].type == WIDGET_OUTPUT_MULTI_LINE) && widget[w].text && torx_allocation_len(*widget[w].text) > 1)
@@ -1103,7 +1100,7 @@ static int keypress(const int w, const int ch)
 			*current_scroll_offset = *current_scroll_offset - 1;
 		return 1; // Rebuild
 	}
-	else if(ch == KEY_DOWN)
+	else if(w > - 1 && ch == KEY_DOWN)
 	{ // DO NOT MODIFY
 		down: {}
 		if((widget[w].type == WIDGET_INPUT_MULTI_LINE || widget[w].type == WIDGET_OUTPUT_MULTI_LINE) && widget[w].text && torx_allocation_len(*widget[w].text) > 1)
@@ -1124,7 +1121,7 @@ static int keypress(const int w, const int ch)
 			*current_scroll_offset = *current_scroll_offset + 1;
 		return 1; // Rebuild
 	}
-	else if(ch == KEY_LEFT)
+	else if(w > - 1 && ch == KEY_LEFT)
 	{ // DO NOT MODIFY
 		if(widget[w].cursor && *widget[w].cursor > 0)
 		{
@@ -1143,7 +1140,7 @@ static int keypress(const int w, const int ch)
 		}
 		beep();
 	}
-	else if(ch == KEY_RIGHT)
+	else if(w > - 1 && ch == KEY_RIGHT)
 	{ // DO NOT MODIFY
 		if(widget[w].cursor && widget[w].text)
 		{
@@ -1167,7 +1164,7 @@ static int keypress(const int w, const int ch)
 			error_printf(0,"Checkpoint right %d && %d < %lu",*current_focus,*current_focus,widgets_existing_before_scrollable);
 		beep();
 	}
-	else if(ch == KEY_DELETE && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE)
+	else if(w > - 1 && ch == KEY_DELETE && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE)
 	{
 		if(*widget[w].cursor + 1 < torx_allocation_len(*widget[w].text))
 		{
@@ -1178,7 +1175,7 @@ static int keypress(const int w, const int ch)
 		}
 		beep();
 	}
-	else if((ch == KEY_BACKSPACE || ch == 127 || ch == 8) && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE)
+	else if(w > - 1 && (ch == KEY_BACKSPACE || ch == 127 || ch == 8) && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE)
 	{
 		if(*widget[w].cursor)
 		{
@@ -1190,7 +1187,7 @@ static int keypress(const int w, const int ch)
 		}
 		beep();
 	}
-	else if(ch >= 32 && ch <= 126 && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE) // TODO Incompatible with utf8/wide characters
+	else if(w > - 1 && ch >= 32 && ch <= 126 && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE) // TODO Incompatible with utf8/wide characters
 	{ // Applicable to text widgets only. Captures space but NOT enter.
 		if(widget[w].type == WIDGET_INPUT_NUMERICAL && (ch < '0' || ch > '9'))
 			beep(); // do nothing, ignore invalid entry
@@ -1201,7 +1198,7 @@ static int keypress(const int w, const int ch)
 		}
 	}
 	else if(((ch >= 32 && ch <= 126) || ch == KEY_BACKSPACE || ch == 127 || ch == 8) && (window_contacts || window_ids || window_requests || window_group_invite || window_group_peerlist))
-	{ // Handle search entry
+	{ // Handle search entry XXX WARNING: Do not do operations on a widget[w]. There may be no widget.
 		size_t allocation = torx_allocation_len(search);
 		if((ch == KEY_BACKSPACE || ch == 127 || ch == 8) && allocation > 1)
 		{
@@ -1224,7 +1221,7 @@ static int keypress(const int w, const int ch)
 		}
 		beep();
 	}
-	else if(widget[w].callback && (ch == '\n' || ch == KEY_ENTER || ch =='\r' || (ch == ' ' && (!widget[w].cursor || !widget[w].text || widget[w].type == WIDGET_OUTPUT_MULTI_LINE))))
+	else if(w > - 1 && widget[w].callback && (ch == '\n' || ch == KEY_ENTER || ch =='\r' || (ch == ' ' && (!widget[w].cursor || !widget[w].text || widget[w].type == WIDGET_OUTPUT_MULTI_LINE))))
 		return widget[w].callback(w); // XXX MUST BE LAST because if this contains a draw_, it will free widget
 	return 0; // Do not rebuild
 }
@@ -2439,6 +2436,7 @@ static void draw_requests_popover(void)
 	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_edit,strlen(text_edit));
 	wattroff(win,A_BOLD); // bold off
 
+	fy = 0; // back to top
 	draw_scrollable(win,&fy,&fx,&focus_popover,&popover_scroll_offset);
 
 	widget_draw_cursor(win); // XXX Must do last
@@ -2454,6 +2452,7 @@ static void draw_ids_popover(void)
 	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_edit,strlen(text_edit));
 	wattroff(win,A_BOLD); // bold off
 
+	fy = 0; // back to top
 	draw_scrollable(win,&fy,&fx,&focus_popover,&popover_scroll_offset);
 
 	widget_draw_cursor(win); // XXX Must do last
@@ -2794,6 +2793,7 @@ static void draw_change_password(void)
 	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_change_password,strlen(text_change_password));
 	wattroff(win,A_BOLD); // bold off
 
+	fy = 0; // back to top
 	draw_scrollable(win,&fy,&fx,&focus_change_password,&change_password_scroll_offset);
 
 	widget_draw_cursor(win); // XXX Must do last
@@ -2942,6 +2942,7 @@ static void draw_chat_settings(void)
 	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_settings,strlen(text_settings));
 	wattroff(win,A_BOLD); // bold off
 
+	fy = 0; // back to top
 	draw_scrollable(win,&fy,&fx,&focus_chat_settings,&chat_settings_scroll_offset);
 
 	widget_draw_cursor(win); // XXX Must do last
@@ -2964,6 +2965,7 @@ static void draw_group_invite(void)
 		print_nowrap(win,&fy,&fx,screen_cols-(fx+2),search,strlen(search));
 	}
 
+	fy = 0; // back to top
 	draw_scrollable(win,&fy,&fx,&focus_group_invite,&group_invite_scroll_offset);
 
 	widget_draw_cursor(win); // XXX Must do last
@@ -2986,6 +2988,7 @@ static void draw_group_peerlist(void)
 		print_nowrap(win,&fy,&fx,screen_cols-(fx+2),search,strlen(search));
 	}
 
+	fy = 0; // back to top
 	draw_scrollable(win,&fy,&fx,&focus_group_peerlist,&group_peerlist_scroll_offset);
 
 	widget_draw_cursor(win); // XXX Must do last
@@ -3208,9 +3211,9 @@ static void draw_contacts(void)
 	{
 		fy = 0,fx = align_right(torx_utf8len(search) + 1 + utf8len);
 		print_nowrap(win,&fy,&fx,screen_cols-(fx+2),search,strlen(search));
-		fy += 1;
 	}
 
+	fy = 1;
 	snprintf(label,sizeof(label),"[ %s ]",text_add_or_generate);
 	utf8len = torx_utf8len(label);
 	fx = align_right(utf8len);
