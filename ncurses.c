@@ -513,7 +513,7 @@ static inline size_t torx_utf8len(const char *str)
 	for(size_t iter = 0; iter < len && str[iter] != '\n'; ) // not necessary to check for \0 because we called strlen
 	{
 		wchar_t wc;
-		const size_t num_bytes = mbrtowc(&wc, &str[iter], len - iter, NULL);
+		const size_t num_bytes = mbrtowc(&wc, &str[iter], len - iter, NULL); // convert a multibyte sequence to a wide character
 		int print_width;
 		if(num_bytes == (size_t)-1 || num_bytes == (size_t)-2 || (print_width = wcwidth(wc)) < 0) // yes this is correct, according to man page
 		{
@@ -851,21 +851,23 @@ static int move_cursor_down(const int w)
 	return 1;
 }
 
-static inline void append_character_at_cursor(const int w, const int ch)
-{
-	if(!*widget[w].text) // first character
-	{
-		*widget[w].text = torx_secure_malloc(2);
-		(*widget[w].text)[*widget[w].cursor + 1] = '\0';
+static inline void append_character_at_cursor(const int w, const wint_t ch)
+{ // DO NOT MODIFY
+	char buff[MB_CUR_MAX]; // NECESSARY to use buffer, if just to get length
+	const size_t length_of_specific_char = wcrtomb(buff,(wchar_t)ch,NULL); // convert a wide character to a multibyte sequence
+	if(!*widget[w].text)
+	{ // Handle first character
+		*widget[w].text = torx_secure_malloc(length_of_specific_char + 1);
+		(*widget[w].text)[length_of_specific_char] = '\0';
 	}
 	else
 	{ // Subsequent characters
 		const size_t prior_allocation_len = torx_allocation_len(*widget[w].text);
-		*widget[w].text = torx_realloc(*widget[w].text,prior_allocation_len+1); // before memmove
-		memmove(&(*widget[w].text)[*widget[w].cursor+1], &(*widget[w].text)[*widget[w].cursor], prior_allocation_len - *widget[w].cursor);
+		*widget[w].text = torx_realloc(*widget[w].text,prior_allocation_len+length_of_specific_char); // before memmove
+		memmove(&(*widget[w].text)[*widget[w].cursor+length_of_specific_char], &(*widget[w].text)[*widget[w].cursor], prior_allocation_len - *widget[w].cursor); // move data forward from cursor, leaving a gap
 	}
-	(*widget[w].text)[*widget[w].cursor] = (char)ch; // TODO Incompatible with utf8/wide characters
-	*widget[w].cursor = *widget[w].cursor + 1;
+	memcpy(&(*widget[w].text)[*widget[w].cursor],buff,length_of_specific_char);
+	*widget[w].cursor = *widget[w].cursor + length_of_specific_char;
 }
 
 static WINDOW *window_prepare(void (*caller)(void),WINDOW **win_p,int *new_focus)
@@ -999,7 +1001,7 @@ static void go_back(size_t motions)
 	}
 }
 
-static int keypress(const int w, const int ch)
+static int keypress(const int w, const wint_t ch)
 {
 	if(w >= (int)(torx_allocation_len(widget) / sizeof(struct widget)))
 	{ // XXX Due to zero indexing, it will likely show "10 of 10" which is indeed an error.
@@ -1125,7 +1127,7 @@ static int keypress(const int w, const int ch)
 	{ // DO NOT MODIFY
 		if(widget[w].cursor && *widget[w].cursor > 0)
 		{
-			*widget[w].cursor = *widget[w].cursor - 1;
+			*widget[w].cursor = *widget[w].cursor - 1; // TODO Incompatible with utf8/wide characters
 			return 1; // Rebuild
 		}
 		else if(window_contacts && *current_focus < (int)widgets_existing_before_scrollable)
@@ -1146,7 +1148,7 @@ static int keypress(const int w, const int ch)
 		{
 			if(*widget[w].cursor + 1 < torx_allocation_len(*widget[w].text))
 			{ // DO NOT COMBINE
-				*widget[w].cursor = *widget[w].cursor + 1;
+				*widget[w].cursor = *widget[w].cursor + 1; // TODO Incompatible with utf8/wide characters
 				return 1; // Rebuild
 			}
 		}
@@ -1169,8 +1171,8 @@ static int keypress(const int w, const int ch)
 		if(*widget[w].cursor + 1 < torx_allocation_len(*widget[w].text))
 		{
 			const size_t prior_allocation_len = torx_allocation_len(*widget[w].text);
-			memmove(&(*widget[w].text)[*widget[w].cursor], &(*widget[w].text)[*widget[w].cursor+1], prior_allocation_len - *widget[w].cursor - 1);
-			*widget[w].text = torx_realloc(*widget[w].text,prior_allocation_len-1); // after memmove
+			memmove(&(*widget[w].text)[*widget[w].cursor], &(*widget[w].text)[*widget[w].cursor+1], prior_allocation_len - *widget[w].cursor - 1); // TODO Incompatible with utf8/wide characters
+			*widget[w].text = torx_realloc(*widget[w].text,prior_allocation_len-1); // after memmove // TODO Incompatible with utf8/wide characters
 			return 1; // Rebuild
 		}
 		beep();
@@ -1180,14 +1182,16 @@ static int keypress(const int w, const int ch)
 		if(*widget[w].cursor)
 		{
 			const size_t prior_allocation_len = torx_allocation_len(*widget[w].text);
-			memmove(&(*widget[w].text)[*widget[w].cursor-1], &(*widget[w].text)[*widget[w].cursor], prior_allocation_len - *widget[w].cursor);
-			*widget[w].text = torx_realloc(*widget[w].text,prior_allocation_len-1); // after memmove
-			*widget[w].cursor = *widget[w].cursor - 1;
+			memmove(&(*widget[w].text)[*widget[w].cursor-1], &(*widget[w].text)[*widget[w].cursor], prior_allocation_len - *widget[w].cursor); // TODO Incompatible with utf8/wide characters
+			*widget[w].text = torx_realloc(*widget[w].text,prior_allocation_len-1); // after memmove // TODO Incompatible with utf8/wide characters
+			*widget[w].cursor = *widget[w].cursor - 1; // TODO Incompatible with utf8/wide characters
 			return 1; // Rebuild
 		}
 		beep();
 	}
-	else if(w > - 1 && ch >= 32 && ch <= 126 && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE) // TODO Incompatible with utf8/wide characters
+	else if(w > - 1 && widget[w].callback && (ch == '\n' || ch == KEY_ENTER || ch =='\r' || (ch == ' ' && (!widget[w].cursor || !widget[w].text || widget[w].type == WIDGET_OUTPUT_MULTI_LINE))))
+		return widget[w].callback(w); // XXX MUST BE LAST because if this contains a draw_, it will free widget
+	else if(w > - 1 && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE)
 	{ // Applicable to text widgets only. Captures space but NOT enter.
 		if(widget[w].type == WIDGET_INPUT_NUMERICAL && (ch < '0' || ch > '9'))
 			beep(); // do nothing, ignore invalid entry
@@ -1197,32 +1201,30 @@ static int keypress(const int w, const int ch)
 			return 1; // Rebuild
 		}
 	}
-	else if(((ch >= 32 && ch <= 126) || ch == KEY_BACKSPACE || ch == 127 || ch == 8) && (window_contacts || window_ids || window_requests || window_group_invite || window_group_peerlist))
+	else if(window_contacts || window_ids || window_requests || window_group_invite || window_group_peerlist)
 	{ // Handle search entry XXX WARNING: Do not do operations on a widget[w]. There may be no widget.
 		size_t allocation = torx_allocation_len(search);
 		if((ch == KEY_BACKSPACE || ch == 127 || ch == 8) && allocation > 1)
 		{
-			search = torx_realloc(search,--allocation);
+			search = torx_realloc(search,--allocation); // TODO Incompatible with utf8/wide characters
 			search[allocation-1] = '\0';
 			return 1;
 		}
-		else if(ch >= 32 && ch <= 126)
+		else
 		{
 			if(allocation)
-				search = torx_realloc(search,++allocation);
+				search = torx_realloc(search,++allocation); // TODO Incompatible with utf8/wide characters
 			else
 			{
-				allocation = 2;
+				allocation = 2; // TODO Incompatible with utf8/wide characters
 				search = torx_secure_malloc(allocation);
 			}
-			search[allocation - 2] = (char)ch;
+			search[allocation - 2] = (char)ch; // TODO Incompatible with utf8/wide characters
 			search[allocation - 1] = '\0'; // redundant
 			return 1;
 		}
 		beep();
 	}
-	else if(w > - 1 && widget[w].callback && (ch == '\n' || ch == KEY_ENTER || ch =='\r' || (ch == ' ' && (!widget[w].cursor || !widget[w].text || widget[w].type == WIDGET_OUTPUT_MULTI_LINE))))
-		return widget[w].callback(w); // XXX MUST BE LAST because if this contains a draw_, it will free widget
 	return 0; // Do not rebuild
 }
 
@@ -3472,7 +3474,7 @@ static int callback_message_input(const int w)
 		chat_scroll_lines = 0;
 	}
 	else // Insert newline at cursor
-		append_character_at_cursor(w,'\n');
+		append_character_at_cursor(w,L'\n'); // L makes it wide
 	return 1; // Rebuild
 }
 
@@ -3937,11 +3939,12 @@ static int await_key_or_signal(WINDOW *win)
 		}
 		else if(FD_ISSET(stdin_fd, &rfds))
 		{ // Keyboard input is ready
-			int attempts = 3,ch;
+			int ret;
+			wint_t wch;
 			do {
-				ch = wgetch(win);
-			} while(ch == ERR && attempts-- > 0);
-			return ch;
+				ret = wget_wch(win,&wch);
+			} while(ret != OK && ret != KEY_CODE_YES);
+			return (int)wch;
 		}
 	}
 }
@@ -4063,9 +4066,9 @@ int main(int argc, char **argv)
 			redraw();
 		}
 		const int ch = await_key_or_signal(stdscr);
-		if(ch == ERR || (ch < 0 && ch != -2) || ch == KEY_RESIZE)
+		if(ch == ERR || (ch < 0 && ch != -2) || (wint_t)ch == KEY_RESIZE)
 			continue;
-		else if(ch == -2 || keypress(*current_focus,ch))
+		else if(ch == -2 || keypress(*current_focus,(wint_t)ch))
 			redraw();
 	}
 	// Clean-up
