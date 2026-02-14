@@ -868,6 +868,7 @@ static inline void append_character_at_cursor(const int w, const wint_t ch)
 	}
 	memcpy(&(*widget[w].text)[*widget[w].cursor],buff,length_of_specific_char);
 	*widget[w].cursor = *widget[w].cursor + length_of_specific_char;
+	sodium_memzero(buff,sizeof(buff));
 }
 
 static WINDOW *window_prepare(void (*caller)(void),WINDOW **win_p,int *new_focus)
@@ -1013,7 +1014,7 @@ static int keypress(const int w, const wint_t ch)
 	const size_t max_height = screen_rows - 3; // TODO this should be specific to each page
 	if(ch == KEY_ESC || ch == KEY_HOME)
 		go_back(1);
-	else if(w > - 1 && (ch == '\t' || ch == KEY_BTAB))
+	else if(w > - 1 && (ch == L'\t' || ch == KEY_BTAB))
 	{
 		if(window_chat && *current_focus == (int)widgets_existing_before_scrollable)
 			*current_focus = (int)(torx_allocation_len(widget) / sizeof(struct widget)) - 1; // skip to last widget (latest message -> unsent)
@@ -1126,8 +1127,9 @@ static int keypress(const int w, const wint_t ch)
 	else if(w > - 1 && ch == KEY_LEFT)
 	{ // DO NOT MODIFY
 		if(widget[w].cursor && *widget[w].cursor > 0)
-		{
-			*widget[w].cursor = *widget[w].cursor - 1; // TODO Incompatible with utf8/wide characters
+		{ // DO NOT MODIFY
+			for(size_t ret,iter = 0; *widget[w].cursor > 0 && (!iter || ((ret = mbrtowc(NULL, &(*widget[w].text)[*widget[w].cursor], iter, NULL)) == (size_t)-1 || ret == (size_t)-2)); iter++)
+				*widget[w].cursor = *widget[w].cursor - 1; // will run at least once
 			return 1; // Rebuild
 		}
 		else if(window_contacts && *current_focus < (int)widgets_existing_before_scrollable)
@@ -1147,8 +1149,12 @@ static int keypress(const int w, const wint_t ch)
 		if(widget[w].cursor && widget[w].text)
 		{
 			if(*widget[w].cursor + 1 < torx_allocation_len(*widget[w].text))
-			{ // DO NOT COMBINE
-				*widget[w].cursor = *widget[w].cursor + 1; // TODO Incompatible with utf8/wide characters
+			{ // DO NOT MODIFY
+				const size_t ret = mbrtowc(NULL, &(*widget[w].text)[*widget[w].cursor], MB_CUR_MAX, NULL);
+				if(ret == (size_t)-1 || ret == (size_t)-2)
+					*widget[w].cursor = *widget[w].cursor + 1;
+				else
+					*widget[w].cursor = *widget[w].cursor + ret;
 				return 1; // Rebuild
 			}
 		}
@@ -1168,11 +1174,14 @@ static int keypress(const int w, const wint_t ch)
 	}
 	else if(w > - 1 && ch == KEY_DELETE && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE)
 	{
-		if(*widget[w].cursor + 1 < torx_allocation_len(*widget[w].text))
-		{
-			const size_t prior_allocation_len = torx_allocation_len(*widget[w].text);
-			memmove(&(*widget[w].text)[*widget[w].cursor], &(*widget[w].text)[*widget[w].cursor+1], prior_allocation_len - *widget[w].cursor - 1); // TODO Incompatible with utf8/wide characters
-			*widget[w].text = torx_realloc(*widget[w].text,prior_allocation_len-1); // after memmove // TODO Incompatible with utf8/wide characters
+		const size_t prior_allocation_len = torx_allocation_len(*widget[w].text);
+		if(*widget[w].cursor + 1 < prior_allocation_len)
+		{ // DO NOT MODIFY
+			size_t ret = mbrtowc(NULL, &(*widget[w].text)[*widget[w].cursor], MB_CUR_MAX, NULL);
+			if(ret == (size_t)-1 || ret == (size_t)-2)
+				ret = 1;
+			memmove(&(*widget[w].text)[*widget[w].cursor], &(*widget[w].text)[*widget[w].cursor+ret], prior_allocation_len - *widget[w].cursor - ret);
+			*widget[w].text = torx_realloc(*widget[w].text,prior_allocation_len-ret); // after memmove
 			return 1; // Rebuild
 		}
 		beep();
@@ -1181,15 +1190,18 @@ static int keypress(const int w, const wint_t ch)
 	{
 		if(*widget[w].cursor)
 		{
+			size_t removal = 0;
+			for(size_t ret,iter = 0; *widget[w].cursor - removal > 0 && (!iter || ((ret = mbrtowc(NULL, &(*widget[w].text)[*widget[w].cursor - removal], iter, NULL)) == (size_t)-1 || ret == (size_t)-2)); iter++)
+				removal += 1; // will run at least once
 			const size_t prior_allocation_len = torx_allocation_len(*widget[w].text);
-			memmove(&(*widget[w].text)[*widget[w].cursor-1], &(*widget[w].text)[*widget[w].cursor], prior_allocation_len - *widget[w].cursor); // TODO Incompatible with utf8/wide characters
-			*widget[w].text = torx_realloc(*widget[w].text,prior_allocation_len-1); // after memmove // TODO Incompatible with utf8/wide characters
-			*widget[w].cursor = *widget[w].cursor - 1; // TODO Incompatible with utf8/wide characters
+			memmove(&(*widget[w].text)[*widget[w].cursor-removal], &(*widget[w].text)[*widget[w].cursor], prior_allocation_len - *widget[w].cursor);
+			*widget[w].text = torx_realloc(*widget[w].text,prior_allocation_len-removal); // after memmove
+			*widget[w].cursor = *widget[w].cursor - removal;
 			return 1; // Rebuild
 		}
 		beep();
 	}
-	else if(w > - 1 && widget[w].callback && (ch == '\n' || ch == KEY_ENTER || ch =='\r' || (ch == ' ' && (!widget[w].cursor || !widget[w].text || widget[w].type == WIDGET_OUTPUT_MULTI_LINE))))
+	else if(w > - 1 && widget[w].callback && (ch == L'\n' || ch == KEY_ENTER || ch == L'\r' || (ch == L' ' && (!widget[w].cursor || !widget[w].text || widget[w].type == WIDGET_OUTPUT_MULTI_LINE))))
 		return widget[w].callback(w); // XXX MUST BE LAST because if this contains a draw_, it will free widget
 	else if(w > - 1 && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE)
 	{ // Applicable to text widgets only. Captures space but NOT enter.
@@ -1202,25 +1214,33 @@ static int keypress(const int w, const wint_t ch)
 		}
 	}
 	else if(window_contacts || window_ids || window_requests || window_group_invite || window_group_peerlist)
-	{ // Handle search entry XXX WARNING: Do not do operations on a widget[w]. There may be no widget.
+	{ // Handle search entry XXX WARNING: Do not do operations on a widget[w]. There may be no widget. XXX
 		size_t allocation = torx_allocation_len(search);
 		if((ch == KEY_BACKSPACE || ch == 127 || ch == 8) && allocation > 1)
 		{
-			search = torx_realloc(search,--allocation); // TODO Incompatible with utf8/wide characters
+			for(size_t ret,iter = 0; allocation - 1 > 0 && (!iter || ((ret = mbrtowc(NULL, &search[allocation - 1], iter, NULL)) == (size_t)-1 || ret == (size_t)-2)); iter++)
+				allocation--; // will run at least once
+			search = torx_realloc(search,allocation);
 			search[allocation-1] = '\0';
 			return 1;
 		}
 		else
 		{
+			char buff[MB_CUR_MAX]; // NECESSARY to use buffer, if just to get length
+			const size_t length_of_specific_char = wcrtomb(buff,(wchar_t)ch,NULL); // convert a wide character to a multibyte sequence
 			if(allocation)
-				search = torx_realloc(search,++allocation); // TODO Incompatible with utf8/wide characters
+			{
+				allocation += length_of_specific_char;
+				search = torx_realloc(search,allocation);
+			}
 			else
 			{
-				allocation = 2; // TODO Incompatible with utf8/wide characters
+				allocation = length_of_specific_char + 1;
 				search = torx_secure_malloc(allocation);
 			}
-			search[allocation - 2] = (char)ch; // TODO Incompatible with utf8/wide characters
+			memcpy(&search[allocation - length_of_specific_char - 1],buff,length_of_specific_char);
 			search[allocation - 1] = '\0'; // redundant
+			sodium_memzero(buff,sizeof(buff));
 			return 1;
 		}
 		beep();
