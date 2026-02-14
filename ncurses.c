@@ -526,6 +526,26 @@ static inline size_t torx_utf8len(const char *str)
 	return total;
 }
 
+static inline size_t cursor_forward(const char* str,const size_t cur)
+{ // Returns how many bytes to move forward for one character
+	if(!str || cur >= torx_allocation_len(str))
+		return 0;
+	size_t byte_movement = mbrtowc(NULL, &str[cur], MB_CUR_MAX, NULL);
+	if(byte_movement == (size_t)-1 || byte_movement == (size_t)-2)
+		byte_movement = 1;
+	return byte_movement;
+}
+
+static inline size_t cursor_back(const char* str,const size_t cur)
+{ // Returns how many bytes to move backward for one character
+	if(!str || !cur)
+		return 0;
+	size_t byte_movement = 1;
+	for(size_t ret,iter = 1; (ret = mbrtowc(NULL, &str[cur - iter], iter, NULL)) == (size_t)-1 || ret == (size_t)-2; iter++)
+		byte_movement += 1;
+	return byte_movement;
+}
+
 static inline size_t print_internal(WINDOW *win,size_t *y,size_t *x,const size_t max_width,const uint8_t wrap,const char *str,const size_t len)
 { // WARNING: Pass bytes len (strlen) NOT utf8len // NOTE: y and x must be initialized
 	if(max_width && str && len)
@@ -807,12 +827,12 @@ static int move_cursor_up(const int w)
 		return 0; // Can't go further
 	size_t starting_row = 0, starting_col = 0;
 	print_wrap(NULL, &starting_row, &starting_col, widget[w].max_width, *widget[w].text, *widget[w].cursor);
-	size_t new_cursor = *widget[w].cursor - 1;
-	for(size_t end_of_prior_line = SIZE_MAX; new_cursor; new_cursor--)
+	size_t new_cursor = *widget[w].cursor - cursor_back(*widget[w].text,*widget[w].cursor);
+	for(size_t end_of_prior_line = SIZE_MAX; new_cursor; new_cursor -= cursor_back(*widget[w].text,new_cursor))
 	{ // Will run at least once
 		size_t present_row = 0, present_col = 0;
 		print_wrap(NULL, &present_row, &present_col, widget[w].max_width, *widget[w].text, new_cursor);
-		if(present_row + 1 < starting_row || (present_row + 1 == starting_row && present_col == starting_col))
+		if(present_row + 1 < starting_row || (present_row + 1 == starting_row && present_col <= starting_col))
 		{
 			if(present_row + 1 < starting_row)
 				new_cursor = end_of_prior_line; // too far, go back to end of prior line
@@ -831,19 +851,20 @@ static int move_cursor_up(const int w)
 
 static int move_cursor_down(const int w)
 { // DO NOT MODIFY
-	if(*widget[w].cursor + 1 == torx_allocation_len(*widget[w].text))
+	const size_t allocation = torx_allocation_len(*widget[w].text);
+	if(*widget[w].cursor + 1 == allocation)
 		return 0; // Can't go further
 	size_t starting_row = 0, starting_col = 0;
 	print_wrap(NULL, &starting_row, &starting_col, widget[w].max_width, *widget[w].text, *widget[w].cursor);
-	size_t new_cursor = *widget[w].cursor + 1;
-	for(; new_cursor < torx_allocation_len(*widget[w].text); new_cursor++)
+	size_t new_cursor = *widget[w].cursor + cursor_forward(*widget[w].text,*widget[w].cursor);
+	for(size_t byte_movement = 12345; byte_movement && new_cursor < allocation; new_cursor += (byte_movement = cursor_forward(*widget[w].text,new_cursor)))
 	{ // Will run at least once
 		size_t present_row = 0, present_col = 0;
 		print_wrap(NULL, &present_row, &present_col, widget[w].max_width, *widget[w].text, new_cursor);
-		if(present_row > starting_row + 1 || (present_row == starting_row + 1 && present_col == starting_col))
+		if(present_row > starting_row + 1 || (present_row == starting_row + 1 && present_col >= starting_col))
 		{
 			if(present_row > starting_row + 1)
-				new_cursor--; // too far, go back to start of prior line
+				new_cursor -= cursor_back(*widget[w].text,new_cursor); // too far, go back to start of prior line
 			break;
 		}
 	}
@@ -1127,9 +1148,8 @@ static int keypress(const int w, const wint_t ch)
 	else if(w > - 1 && ch == KEY_LEFT)
 	{ // DO NOT MODIFY
 		if(widget[w].cursor && *widget[w].cursor > 0)
-		{ // DO NOT MODIFY
-			for(size_t ret,iter = 0; *widget[w].cursor > 0 && (!iter || ((ret = mbrtowc(NULL, &(*widget[w].text)[*widget[w].cursor], iter, NULL)) == (size_t)-1 || ret == (size_t)-2)); iter++)
-				*widget[w].cursor = *widget[w].cursor - 1; // will run at least once
+		{
+			*widget[w].cursor = *widget[w].cursor - cursor_back(*widget[w].text,*widget[w].cursor);
 			return 1; // Rebuild
 		}
 		else if(window_contacts && *current_focus < (int)widgets_existing_before_scrollable)
@@ -1149,12 +1169,8 @@ static int keypress(const int w, const wint_t ch)
 		if(widget[w].cursor && widget[w].text)
 		{
 			if(*widget[w].cursor + 1 < torx_allocation_len(*widget[w].text))
-			{ // DO NOT MODIFY
-				const size_t ret = mbrtowc(NULL, &(*widget[w].text)[*widget[w].cursor], MB_CUR_MAX, NULL);
-				if(ret == (size_t)-1 || ret == (size_t)-2)
-					*widget[w].cursor = *widget[w].cursor + 1;
-				else
-					*widget[w].cursor = *widget[w].cursor + ret;
+			{
+				*widget[w].cursor = *widget[w].cursor + cursor_forward(*widget[w].text,*widget[w].cursor);;
 				return 1; // Rebuild
 			}
 		}
@@ -1168,8 +1184,6 @@ static int keypress(const int w, const wint_t ch)
 			*current_focus = (int)widgets_existing_before_scrollable - 1;
 			return 1;
 		}
-		else
-			error_printf(0,"Checkpoint right %d && %d < %lu",*current_focus,*current_focus,widgets_existing_before_scrollable);
 		beep();
 	}
 	else if(w > - 1 && ch == KEY_DELETE && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE)
@@ -1177,9 +1191,7 @@ static int keypress(const int w, const wint_t ch)
 		const size_t prior_allocation_len = torx_allocation_len(*widget[w].text);
 		if(*widget[w].cursor + 1 < prior_allocation_len)
 		{ // DO NOT MODIFY
-			size_t ret = mbrtowc(NULL, &(*widget[w].text)[*widget[w].cursor], MB_CUR_MAX, NULL);
-			if(ret == (size_t)-1 || ret == (size_t)-2)
-				ret = 1;
+			const size_t ret = cursor_forward(*widget[w].text,*widget[w].cursor);
 			memmove(&(*widget[w].text)[*widget[w].cursor], &(*widget[w].text)[*widget[w].cursor+ret], prior_allocation_len - *widget[w].cursor - ret);
 			*widget[w].text = torx_realloc(*widget[w].text,prior_allocation_len-ret); // after memmove
 			return 1; // Rebuild
@@ -1190,9 +1202,7 @@ static int keypress(const int w, const wint_t ch)
 	{
 		if(*widget[w].cursor)
 		{
-			size_t removal = 0;
-			for(size_t ret,iter = 0; *widget[w].cursor - removal > 0 && (!iter || ((ret = mbrtowc(NULL, &(*widget[w].text)[*widget[w].cursor - removal], iter, NULL)) == (size_t)-1 || ret == (size_t)-2)); iter++)
-				removal += 1; // will run at least once
+			const size_t removal = cursor_back(*widget[w].text,*widget[w].cursor);
 			const size_t prior_allocation_len = torx_allocation_len(*widget[w].text);
 			memmove(&(*widget[w].text)[*widget[w].cursor-removal], &(*widget[w].text)[*widget[w].cursor], prior_allocation_len - *widget[w].cursor);
 			*widget[w].text = torx_realloc(*widget[w].text,prior_allocation_len-removal); // after memmove
@@ -1216,13 +1226,15 @@ static int keypress(const int w, const wint_t ch)
 	else if(window_contacts || window_ids || window_requests || window_group_invite || window_group_peerlist)
 	{ // Handle search entry XXX WARNING: Do not do operations on a widget[w]. There may be no widget. XXX
 		size_t allocation = torx_allocation_len(search);
-		if((ch == KEY_BACKSPACE || ch == 127 || ch == 8) && allocation > 1)
+		if(ch == KEY_BACKSPACE || ch == 127 || ch == 8)
 		{
-			for(size_t ret,iter = 0; allocation - 1 > 0 && (!iter || ((ret = mbrtowc(NULL, &search[allocation - 1], iter, NULL)) == (size_t)-1 || ret == (size_t)-2)); iter++)
-				allocation--; // will run at least once
-			search = torx_realloc(search,allocation);
-			search[allocation-1] = '\0';
-			return 1;
+			if(allocation > 1)
+			{ // DO NOT COMBINE
+				allocation -= cursor_back(search,allocation - 1);
+				search = torx_realloc(search,allocation);
+				search[allocation-1] = '\0';
+				return 1;
+			}
 		}
 		else
 		{
@@ -2758,10 +2770,10 @@ static void draw_logs(void)
 		widget_text(win,&fy,&fx,screen_rows - 2,inner_width,callback_debug_level,WIDGET_INPUT_NUMERICAL,&tmp_debug_level,&tmp_debug_level_pos);
 		fy += 1;
 	}
-
+if(tor_log_mode) error_simple(0,"Checkpoint scroll 1");
 	fx = align_center(inner_width);
 	widget_text(win,&fy,&fx,screen_rows - 2,inner_width,NULL,WIDGET_OUTPUT_MULTI_LINE,tor_log_mode ? &tor_log_buffer : &torx_log_buffer,tor_log_mode ? &tor_log_buffer_pos : &torx_log_buffer_pos);
-
+if(tor_log_mode) error_simple(0,"Checkpoint scroll 2");
 	sodium_memzero(label,sizeof(label));
 	widget_draw_cursor(win); // XXX Must do last
 }
@@ -4069,7 +4081,7 @@ int main(int argc, char **argv)
 	initscr(); cbreak(); noecho(); noqiflush();
 	keypad(stdscr,TRUE); // necessary to use arrow keys
 	set_escdelay(50); // Reduce delay upon pressing Esc. Only relevant if we use keypad() anywhere
-
+	refresh(); // Prevents window blanking if the first keypress is KEY_BACKSPACE or KEY_LEFT
 	// Set window resize function
 	struct sigaction sa = {0};
 	sa.sa_handler = signal_resize;
