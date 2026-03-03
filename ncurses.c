@@ -158,8 +158,8 @@ static WINDOW **window_current = NULL;
 static int *current_focus = NULL; // XXX must be set otherwise we will dereference a NULL very quick! XXX
 static size_t *current_scroll_offset = NULL; // WARNING: Is null if no scrollable in route
 // XXX START One required for each route START XXX
-static int focus_login = -1, focus_settings = -1, focus_requests = -1, focus_ids = -1, focus_popover = -1, focus_contacts = -1, focus_chat = -1, focus_logs = -1, focus_torrc = -1, focus_change_password = -1, focus_generate = -1, focus_global_kill = -1, focus_chat_actions = -1, focus_chat_settings = -1, focus_group_invite = -1, focus_group_peerlist = -1; // must initialize as -1 so that draw_* can set a default
-static WINDOW *window_login = NULL, *window_settings = NULL, *window_requests = NULL, *window_ids = NULL, *window_requests_popover = NULL, *window_ids_popover = NULL, *window_contacts = NULL, *window_chat = NULL, *window_logs = NULL, *window_torrc = NULL, *window_change_password = NULL, *window_generate = NULL, *window_global_kill = NULL, *window_chat_actions = NULL, *window_chat_settings = NULL, *window_group_invite = NULL, *window_group_peerlist = NULL;
+static int focus_login = -1, focus_settings = -1, focus_requests = -1, focus_ids = -1, focus_popover = -1, focus_contacts = -1, focus_chat = -1, focus_logs = -1, focus_torrc = -1, focus_change_password = -1, focus_generate = -1, focus_global_kill = -1, focus_chat_actions = -1, focus_message_actions = -1, focus_chat_settings = -1, focus_group_invite = -1, focus_group_peerlist = -1; // must initialize as -1 so that draw_* can set a default
+static WINDOW *window_login = NULL, *window_settings = NULL, *window_requests = NULL, *window_ids = NULL, *window_requests_popover = NULL, *window_ids_popover = NULL, *window_contacts = NULL, *window_chat = NULL, *window_logs = NULL, *window_torrc = NULL, *window_change_password = NULL, *window_generate = NULL, *window_global_kill = NULL, *window_chat_actions = NULL, *window_message_actions = NULL, *window_chat_settings = NULL, *window_group_invite = NULL, *window_group_peerlist = NULL;
 // XXX END One required for each route END XXX
 
 static void (*redraw)(void) = NULL;
@@ -169,7 +169,9 @@ static uint8_t highlight_active = 0; // must initialize as 0
 static size_t cursor[2] = {0}; // y,x
 static size_t inner_width;
 static int selected_n = 0; // internal use only, contact list
-static int treeview_n = 0; // IDs/Requests pages/popovers
+static int treeview_n = 0; // internal use only, IDs/Requests pages/popovers
+static int selected_msg_n = 0; // internal use only, highlighted message_n. Do not rely upon outside of callback_message!
+static int selected_msg_i = 0; // internal use only, highlighted message_i. Do not rely upon outside of callback_message!
 static int global_n = -1;
 static int global_group = -1;
 static volatile sig_atomic_t resized = 0;
@@ -933,6 +935,8 @@ static void go_back(size_t motions)
 					t_peer[global_n].pm_n = -1;
 					t_peer[global_n].edit_n = -1;
 					t_peer[global_n].edit_i = INT_MIN;
+					torx_free((void*)&t_peer[global_n].unsent);
+					t_peer[global_n].unsent_pos = 0;
 					if(motions < 2)
 						redraw();
 					continue;
@@ -970,9 +974,9 @@ static void go_back(size_t motions)
 			else // Must prepare prior to destruction
 				window_prepare(&draw_contacts,&window_contacts,&focus_contacts);
 		}
-		else if(window_chat_actions || window_chat_settings)
+		else if(window_chat_actions || window_message_actions || window_chat_settings)
 		{
-			if(window_chat_actions)
+			if(window_chat_actions || window_message_actions)
 				torx_free((void*)&tmp_rename);
 			if(motions < 2)
 				draw_chat();
@@ -1027,7 +1031,7 @@ static int keypress(const int w, const wint_t ch)
 {
 	if(w >= (int)(torx_allocation_len(widget) / sizeof(struct widget)))
 	{ // XXX Due to zero indexing, it will likely show "10 of 10" which is indeed an error.
-		error_printf(0,"Keypress called on possibly invalid widget: %lu of %lu",w,torx_allocation_len(widget) / sizeof(struct widget));
+		error_printf(0,"Keypress called on possibly invalid widget: %d of %lu",w,torx_allocation_len(widget) / sizeof(struct widget));
 		go_back(1);
 		return 0; // Sanity check
 	}
@@ -1906,7 +1910,9 @@ static int callback_ctrl_pass(const int w)
 
 static int callback_rename(const int w)
 {
-	if(global_n > -1)
+	if(window_message_actions) // must be first because global_n is also set
+		change_nick(selected_msg_n,*widget[w].text);
+	else if(global_n > -1)
 		change_nick(global_n,*widget[w].text);
 	else if(treeview_n > -1)
 		change_nick(treeview_n,*widget[w].text);
@@ -3288,9 +3294,129 @@ static void draw_contacts(void)
 	widget_draw_cursor(win); // XXX Must do last
 }
 
+static int callback_message_delete(const int w)
+{
+	(void)w;
+	message_edit(selected_msg_n,selected_msg_i,NULL);
+	go_back(1);
+	return 0; // Do not rebuild
+}
+
+static int callback_message_edit(const int w)
+{
+	(void)w;
+	const int p_iter = getter_int(selected_msg_n,selected_msg_i,-1,offsetof(struct message_list,p_iter));
+	if(p_iter < 0)
+		return 0;
+	pthread_rwlock_rdlock(&mutex_protocols); // 🟧
+	const uint32_t null_terminated_len = protocols[p_iter].null_terminated_len;
+	const uint32_t date_len = protocols[p_iter].date_len;
+	const uint32_t signature_len = protocols[p_iter].signature_len;
+	pthread_rwlock_unlock(&mutex_protocols); // 🟩
+
+	t_peer[global_n].edit_n = selected_msg_n;
+	t_peer[global_n].edit_i = selected_msg_i;
+
+	torx_free((void*)&t_peer[global_n].unsent);
+	t_peer[global_n].unsent_pos = 0;
+
+	t_peer[global_n].unsent = getter_string(selected_msg_n,selected_msg_i,-1,offsetof(struct message_list,message));
+	t_peer[global_n].unsent_pos = torx_allocation_len(t_peer[global_n].unsent) - (null_terminated_len + date_len + signature_len);
+	if(date_len + signature_len)
+		t_peer[global_n].unsent = torx_realloc(t_peer[global_n].unsent,torx_allocation_len(t_peer[global_n].unsent) + null_terminated_len);
+
+	go_back(1);
+	return 0; // Do not rebuild
+}
+
+static int callback_message_resend(const int w)
+{
+	(void)w;
+	message_resend(selected_msg_n,selected_msg_i);
+	go_back(1);
+	return 0; // Do not rebuild
+}
+
+static int callback_message_group_accept(const int w)
+{
+	(void)w;
+	group_join_from_i(selected_msg_n,selected_msg_i);
+	go_back(1);
+	return 0; // Do not rebuild
+}
+
+static void draw_message_actions(void)
+{ // Message Actions Route (NOTE: global_n is still set).
+	const int n = selected_msg_n;
+	const int i = selected_msg_i;
+	const int p_iter = getter_int(n,i,-1,offsetof(struct message_list,p_iter));
+	if(p_iter < 0)
+		return;
+	WINDOW *win = window_prepare(&draw_message_actions,&window_message_actions,&focus_message_actions); // XXX Must do first
+	widget_next_has_default_focus(); // XXX Set default widget focus
+
+	pthread_rwlock_rdlock(&mutex_protocols); // 🟧
+	const uint8_t utf8 = protocols[p_iter].utf8;
+	const uint16_t protocol = protocols[p_iter].protocol;
+	const uint32_t null_terminated_len = protocols[p_iter].null_terminated_len;
+	pthread_rwlock_unlock(&mutex_protocols); // 🟩
+	const uint8_t owner = getter_uint8(global_n,INT_MIN,-1,offsetof(struct peer_list,owner));
+	const uint8_t stat = getter_uint8(n,i,-1,offsetof(struct message_list,stat));
+
+	size_t fy = 0,fx = 2;
+	// Draw top line widgets
+	wattron(win,A_BOLD); // bold on
+	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_actions,strlen(text_actions));
+	wattroff(win,A_BOLD); // bold off
+
+	char label[256];
+	snprintf(label,sizeof(label),"[ %s ]",text_delete);
+	size_t utf8len = torx_utf8len(label);
+	fy += 2, fx = align_right(utf8len);
+	widget_button(win,&fy,&fx,utf8len,callback_message_delete,label);
+
+	if(utf8 && null_terminated_len)
+	{
+		snprintf(label,sizeof(label),"[ %s ]",text_edit);
+		utf8len = torx_utf8len(label);
+		fy += 1, fx = align_right(utf8len);
+		widget_button(win,&fy,&fx,utf8len,callback_message_edit,label);
+	}
+
+	if(stat != ENUM_MESSAGE_RECV)
+	{
+		snprintf(label,sizeof(label),"[ %s ]",text_resend);
+		utf8len = torx_utf8len(label);
+		fy += 1, fx = align_right(utf8len);
+		widget_button(win,&fy,&fx,utf8len,callback_message_resend,label);
+	}
+
+	if(stat == ENUM_MESSAGE_RECV && (protocol == ENUM_PROTOCOL_GROUP_OFFER || protocol == ENUM_PROTOCOL_GROUP_OFFER_FIRST))
+	{
+		snprintf(label,sizeof(label),"[ %s ]",text_accept);
+		utf8len = torx_utf8len(label);
+		fy += 1, fx = align_right(utf8len);
+		widget_button(win,&fy,&fx,utf8len,callback_message_group_accept,label);
+	}
+
+	if(owner == ENUM_OWNER_GROUP_CTRL)
+	{ // allow renaming the peer
+		fy += 1, fx = 2;
+		print_wrap(win, &fy, &fx, screen_cols-(2*2), text_identifier, strlen(text_identifier));
+		fy += 1,fx = align_right(torx_utf8len(tmp_rename));
+		widget_text(win,&fy,&fx,1,screen_cols-(2*2),callback_rename,WIDGET_INPUT_SINGLE_LINE,&tmp_rename,&tmp_rename_pos);
+	}
+
+	sodium_memzero(label,sizeof(label));
+	widget_draw_cursor(win); // XXX Must do last
+}
+
 static int callback_message(const int w)
 {
-	error_printf(0,"Checkpoint widget=%d n=? i=?",w); // TODO load n/i into widget. A void* is an option with iitovp/vptoii
+	(void)w;
+	tmp_rename = getter_string(global_n,INT_MIN,-1,offsetof(struct peer_list,peernick));
+	tmp_rename_pos = tmp_rename ? torx_allocation_len(tmp_rename) - 1 : 0;
+	draw_message_actions();
 	return 0; // Do not rebuild
 //	return 1; // Rebuild
 }
@@ -3437,9 +3563,13 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 			size_t fy = top_line + available_lines - anticipated_lines;
 			size_t seperate_fy = fy, seperate_fx = fx;
 			const int w = widget_new(WIDGET_CHECKBOX,inner_width);
-			widget[w].callback = callback_message; // TODO
+			widget[w].callback = callback_message;
 			if(*current_focus == w)
+			{
 				toggle_highlight(win); // highlight on
+				selected_msg_n = n;
+				selected_msg_i = i;
+			}
 			if(group_pm) // Make PMs bold
 				wattron(win,A_BOLD); // bold on
 			lines = 1 + required_offset + print_wrap(win,&fy,&fx,inner_width,&message[/*peernick_len + timebuffer_len + */offset],printable_len - offset - truncation/* - peernick_len - timebuffer_len*/);
