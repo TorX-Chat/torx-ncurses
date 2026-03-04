@@ -3336,7 +3336,7 @@ static int callback_message_edit(const int w)
 	t_peer[global_n].unsent = getter_string(selected_msg_n,selected_msg_i,-1,offsetof(struct message_list,message));
 	t_peer[global_n].unsent_pos = torx_allocation_len(t_peer[global_n].unsent) - (null_terminated_len + date_len + signature_len);
 	if(date_len + signature_len)
-		t_peer[global_n].unsent = torx_realloc(t_peer[global_n].unsent,torx_allocation_len(t_peer[global_n].unsent) + null_terminated_len);
+		t_peer[global_n].unsent = torx_realloc(t_peer[global_n].unsent,t_peer[global_n].unsent_pos + null_terminated_len);
 
 	go_back(1);
 	return 0; // Do not rebuild
@@ -3373,7 +3373,7 @@ static void draw_message_actions(void)
 	const uint16_t protocol = protocols[p_iter].protocol;
 	const uint32_t null_terminated_len = protocols[p_iter].null_terminated_len;
 	pthread_rwlock_unlock(&mutex_protocols); // 🟩
-	const uint8_t owner = getter_uint8(global_n,INT_MIN,-1,offsetof(struct peer_list,owner));
+	const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
 	const uint8_t stat = getter_uint8(n,i,-1,offsetof(struct message_list,stat));
 
 	size_t fy = 0,fx = 2;
@@ -3412,7 +3412,7 @@ static void draw_message_actions(void)
 		widget_button(win,&fy,&fx,utf8len,callback_message_group_accept,label);
 	}
 
-	if(owner == ENUM_OWNER_GROUP_CTRL)
+	if(owner == ENUM_OWNER_GROUP_PEER)
 	{ // allow renaming the peer
 		fy += 1, fx = 2;
 		print_wrap(win, &fy, &fx, screen_cols-(2*2), text_identifier, strlen(text_identifier));
@@ -4085,7 +4085,7 @@ static int await_key_or_signal(WINDOW *win)
 				{
 					const int n = cb_page->cb_args->mem_int_a;
 				//	const int i = cb_page->cb_args->mem_int_b;
-					if(n == global_n || global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n))) // TODO could also check if this message is visible, if that is trivial, and verify that we didn't just manually edit this message (which also triggers MESSAGE_MODIFIED).
+					if(n == global_n || (getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner)) == ENUM_OWNER_GROUP_PEER && global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n)))) // TODO could also check if this message is visible, if that is trivial, and verify that we didn't just manually edit this message (which also triggers MESSAGE_MODIFIED).
 						must_redraw_ui = -2;
 				}
 				else if(cb_page->cb_type == ENUM_MESSAGE_DELETED)
