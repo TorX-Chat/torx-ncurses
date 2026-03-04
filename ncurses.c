@@ -178,10 +178,10 @@ static volatile sig_atomic_t resized = 0;
 static volatile sig_atomic_t resize_seq = 0;
 static char *search = NULL;
 
-static int log_unread = 1; // TODO unused (NOT YET LOGGING UNREAD COUNTS)
-static size_t totalUnreadPeer = 0;  // TODO unused
-static size_t totalUnreadGroup = 0; // TODO unused
-static size_t totalIncoming = 0; // TODO unused
+static int log_unread = 1;
+static size_t totalUnreadPeer = 0;
+static size_t totalUnreadGroup = 0;
+static size_t totalIncoming = 0; // incoming requests
 
 static bool running = true; // set to false to exit
 static int sig_num = 0;
@@ -1932,14 +1932,18 @@ static int callback_toggle_block(const int w)
 static int callback_peer_accept(const int w)
 {
 	(void)w;
+	if(window_requests_popover && !outgoing_mode)
+		totalIncoming--;
 	peer_accept(treeview_n);
 	go_back(1);
 	return 0; // Do not rebuild
 }
 
 static int callback_peer_delete(const int w)
-{
+{ // This is not a general deletion function, it is only for incoming requests
 	(void)w;
+	if(window_requests_popover && !outgoing_mode)
+		totalIncoming--;
 	const int peer_index = getter_int(treeview_n,INT_MIN,-1,offsetof(struct peer_list,peer_index));
 	takedown_onion(peer_index,1);
 	go_back(1);
@@ -2541,6 +2545,11 @@ static int callback_peer(const int w)
 {
 	(void)w;
 	global_n = selected_n;
+	const uint8_t owner = getter_uint8(global_n,INT_MIN,-1,offsetof(struct peer_list,owner));
+	if(owner == ENUM_OWNER_GROUP_CTRL)
+		totalUnreadGroup -= t_peer[global_n].unread;
+	else
+		totalUnreadPeer -= t_peer[global_n].unread;
 	t_peer[global_n].unread = 0;
 	chat_scroll_lines = 0;
 	draw_chat();
@@ -2592,9 +2601,9 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 				const uint8_t recvfd_connected = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,recvfd_connected));
 				char *peernick = getter_string(n,INT_MIN,-1,offsetof(struct peer_list,peernick));
 				if(t_peer[n].unread > 0)
-					snprintf(label, sizeof(label), "%s(%lu) %s", (sendfd_connected || recvfd_connected) ? "* ":"", t_peer[n].unread, peernick);
+					snprintf(label, sizeof(label), "(%lu) %s", t_peer[n].unread, peernick);
 				else
-					snprintf(label, sizeof(label), "%s%s", (sendfd_connected || recvfd_connected) ? "* ":"", peernick);
+					snprintf(label, sizeof(label), "%s", peernick);
 				if(sendfd_connected || recvfd_connected)
 					wattron(win,A_BOLD); // bold on
 				const int w = widget_button(win,fyp,fxp,screen_cols-(2*2),callback_peer,label);
@@ -3235,14 +3244,16 @@ static void draw_contacts(void)
 	wattroff(win,A_BOLD); // bold off
 
 	char label[256];
-	const char *selected;
-	if(groups_mode == ENUM_SHOW_PEER)
-		selected = text_peer;
+	if(groups_mode == ENUM_SHOW_PEER && totalUnreadGroup)
+		snprintf(label,sizeof(label),"[ (%lu) %s ]",totalUnreadGroup,text_group);
+	else if(groups_mode == ENUM_SHOW_PEER)
+		snprintf(label,sizeof(label),"[ %s ]",text_group);
 	else if(groups_mode == ENUM_SHOW_GROUP)
-		selected = text_group;
-	else // if(groups_mode == ENUM_SHOW_BLOCK)
-		selected = text_block;
-	snprintf(label,sizeof(label),"[ %s ]",selected);
+		snprintf(label,sizeof(label),"[ %s ]",text_block);
+	else if(groups_mode == ENUM_SHOW_BLOCK && totalUnreadPeer)
+		snprintf(label,sizeof(label),"[ (%lu) %s ]",totalUnreadPeer,text_peer);
+	else if(groups_mode == ENUM_SHOW_BLOCK)
+		snprintf(label,sizeof(label),"[ %s ]",text_peer);
 	size_t utf8len = torx_utf8len(label);
 	fy = 0,fx = align_right(utf8len);
 	widget_button(win,&fy,&fx,utf8len,callback_contacts_groups,label);
@@ -3258,8 +3269,10 @@ static void draw_contacts(void)
 	utf8len = torx_utf8len(label);
 	fx = align_right(utf8len);
 	widget_button(win,&fy,&fx,utf8len,callback_generate,label);
-
-	snprintf(label,sizeof(label),"[ %s ]",text_requests);
+	if(totalIncoming)
+		snprintf(label,sizeof(label),"[ (%lu) %s ]",totalIncoming,text_requests);
+	else
+		snprintf(label,sizeof(label),"[ %s ]",text_requests);
 	utf8len = torx_utf8len(label);
 	fx = align_right(utf8len);
 	widget_button(win,&fy,&fx,utf8len,callback_requests,label);
@@ -3465,6 +3478,10 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 			timebuffer = torx_realloc(timebuffer,torx_allocation_len(timebuffer)-3); // Slice off seconds
 			timebuffer[torx_allocation_len(timebuffer)-1] = '\0';
 			timebuffer_len = torx_allocation_len(timebuffer);
+			if(stat == ENUM_MESSAGE_FAIL)
+				for(int iter = (int)timebuffer_len - 2; iter > -1; iter--)
+					if(timebuffer[iter] >= '0' && timebuffer[iter] <= '9')
+						timebuffer[iter] = '-'; // Replace digits with - if the message is unsent
 		}
 		if(show_nick)
 		{
@@ -3909,11 +3926,13 @@ static int await_key_or_signal(WINDOW *win)
 				}
 				else if(cb_page->cb_type == ENUM_INCOMING_FRIEND_REQUEST)
 				{
-					error_simple(0,"Checkpoint ENUM_INCOMING_FRIEND_REQUEST"); // TODO
+					if(window_contacts || (window_requests && !outgoing_mode))
+						must_redraw_ui = -2;
+					totalIncoming++;
 					notify("TODO","ENUM_INCOMING_FRIEND_REQUEST");
 				}
 				else if(cb_page->cb_type == ENUM_ONION_DELETED)
-				{
+				{ // TODO should go_back in the case of global_n (ie receiving kill code), or we could have draw_chat and popovers trigger a go_back if the peer is deleted.
 					const int n = cb_page->cb_args->mem_int_a;
 					if(n == generated_n)
 					{
@@ -3946,17 +3965,20 @@ static int await_key_or_signal(WINDOW *win)
 				}
 				else if(cb_page->cb_type == ENUM_PEER_NEW)
 				{
-					error_simple(0,"Checkpoint ENUM_PEER_NEW"); // TODO
-					notify("TODO","ENUM_PEER_NEW");
+					const int n = cb_page->cb_args->mem_int_a;
+					const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+					if((window_contacts && groups_mode == ENUM_SHOW_PEER && owner == ENUM_OWNER_CTRL) || (window_group_peerlist && owner == ENUM_OWNER_GROUP_PEER && global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n))))
+						must_redraw_ui = -2;
 				}
 				else if(cb_page->cb_type == ENUM_ONION_READY)
 				{
 					generated_n = cb_page->cb_args->mem_int_a;
+					const uint8_t owner = getter_uint8(generated_n,INT_MIN,-1,offsetof(struct peer_list,owner));
 					if(threadsafe_read_uint8(&mutex_global_variable,&shorten_torxids))
 						generate_output = getter_string(generated_n, INT_MIN, -1, offsetof(struct peer_list, torxid));
 					else
 						generate_output = getter_string(generated_n, INT_MIN, -1, offsetof(struct peer_list, onion));
-					if(window_generate)
+					if(window_generate || (window_ids && ((single_mode && owner == ENUM_OWNER_SING) || (!single_mode && owner == ENUM_OWNER_MULT))))
 						must_redraw_ui = -2;
 				}
 				else if(cb_page->cb_type == ENUM_ERROR)
@@ -4013,7 +4035,7 @@ static int await_key_or_signal(WINDOW *win)
 						if(t_peer[n].unread > 0)
 						{
 							const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-							if (owner == ENUM_OWNER_GROUP_CTRL)
+							if(owner == ENUM_OWNER_GROUP_CTRL)
 								totalUnreadGroup += t_peer[n].unread;
 							else
 								totalUnreadPeer += t_peer[n].unread;
@@ -4040,19 +4062,35 @@ static int await_key_or_signal(WINDOW *win)
 							const int g = set_g(n,NULL);
 							group_n = getter_group_int(g,offsetof(struct group_list,n));
 						}
+						if(global_n < 0 || (global_n != n && global_n != group_n))
+						{
+							if(group_n > -1)
+							{
+								t_peer[group_n].unread++;
+								totalUnreadGroup++;
+							}
+							else
+							{
+								t_peer[n].unread++;
+								totalUnreadPeer++;
+							}
+						}
 						if(window_contacts || (global_n > -1 && (global_n == n || global_n == group_n)))
 							must_redraw_ui = -2; // better than draw_chat(global_n); // NOT n or this could draw a PM chat
-						if(window_contacts || must_redraw_ui != -2) // NOT else if
+						if((window_contacts || must_redraw_ui != -2) && (owner != ENUM_OWNER_GROUP_PEER || t_peer[group_n].mute == 0) && t_peer[n].mute == 0) // NOT else if
 							notify("TODO","ENUM_MESSAGE_NEW"); // Notify if on contact list, or if we're on a chat that isn't the relevant one
 					}
 				}
 				else if(cb_page->cb_type == ENUM_MESSAGE_MODIFIED)
 				{
-					error_simple(0,"Checkpoint ENUM_MESSAGE_MODIFIED"); // TODO consider redrawing? Perhaps shouldn't need to do anything in ncurses.
+					const int n = cb_page->cb_args->mem_int_a;
+				//	const int i = cb_page->cb_args->mem_int_b;
+					if(n == global_n || global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n))) // TODO could also check if this message is visible, if that is trivial, and verify that we didn't just manually edit this message (which also triggers MESSAGE_MODIFIED).
+						must_redraw_ui = -2;
 				}
 				else if(cb_page->cb_type == ENUM_MESSAGE_DELETED)
 				{
-					error_simple(0,"Checkpoint ENUM_MESSAGE_DELETED"); // TODO consider redrawing? Perhaps shouldn't need to do anything in ncurses.
+					// Unnecessary to do anything since this will only be manually triggered.
 				}
 				else if(cb_page->cb_type == ENUM_LOGIN)
 				{
@@ -4064,7 +4102,17 @@ static int await_key_or_signal(WINDOW *win)
 				}
 				else if(cb_page->cb_type == ENUM_PEER_LOADED)
 				{
-					error_simple(0,"Checkpoint ENUM_PEER_LOADED"); // TODO redraw if window_contacts.... etc
+					const int n = cb_page->cb_args->mem_int_a;
+					const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+					const uint8_t status = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,status));
+					if(owner == ENUM_OWNER_CTRL && status == ENUM_STATUS_PENDING)
+					{
+						totalIncoming++;
+						if(window_contacts)
+							must_redraw_ui = -2;
+					}
+					else if(window_contacts && ((groups_mode == ENUM_SHOW_PEER && owner == ENUM_OWNER_CTRL) || (groups_mode == ENUM_SHOW_GROUP && owner == ENUM_OWNER_GROUP_CTRL)))
+						must_redraw_ui = -2;
 				}
 				else if(cb_page->cb_type == ENUM_CLEANUP)
 				{
@@ -4074,15 +4122,15 @@ static int await_key_or_signal(WINDOW *win)
 				}
 				else if(cb_page->cb_type == ENUM_STREAM)
 				{
-					error_simple(0,"Checkpoint ENUM_STREAM"); // TODO ignore
+					error_simple(0,"Checkpoint ENUM_STREAM");
 				}
 				else if(cb_page->cb_type == ENUM_MESSAGE_EXTRA)
-				{
-					error_simple(0,"Checkpoint ENUM_MESSAGE_EXTRA"); // TODO ???
+				{ // This is used in other clients for loading from disk whether an audio message has been heard/unheard
+					error_simple(0,"Checkpoint ENUM_MESSAGE_EXTRA");
 				}
 				else if(cb_page->cb_type == ENUM_MESSAGE_MORE)
-				{
-					error_simple(0,"Checkpoint ENUM_MESSAGE_MORE"); // TODO ???
+				{ // Triggers after we call message_load_more. Should be not need to be handled, but untested.
+					error_simple(0,"Checkpoint ENUM_MESSAGE_MORE");
 				}
 				else if(cb_page->cb_type == ENUM_UNKNOWN)
 				{
@@ -4234,6 +4282,21 @@ int main(int argc, char **argv)
 			redraw();
 	}
 	// Clean-up
+	char p1[21];
+	if(log_unread == 1)
+	{ // Log Unread Message Count in the same manner that we store last_seen
+		for(int peer_index,n = 0 ; (peer_index = getter_int(n,INT_MIN,-1,offsetof(struct peer_list,peer_index))) > -1 || getter_byte(n,INT_MIN,-1,offsetof(struct peer_list,onion)) != 0 ; n++)
+		{ // storing last_seen time to .key file. NOTE: this will execute more frequently than we might want if logging is disabled. however there is little we can do.
+			if(peer_index < 0)
+				continue;
+			const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+			if(owner == ENUM_OWNER_CTRL || owner == ENUM_OWNER_GROUP_CTRL)
+			{ // for private messages, will need to be more complicated than just adding GROUP_PEER here
+				snprintf(p1,sizeof(p1),"%zu",t_peer[n].unread);
+				sql_setting(0,peer_index,"unread",p1,strlen(p1));
+			}
+		}
+	}
 	cleanup_lib(sig_num);
 	torx_free((void*)&search);
 	widget_clear(NULL);
