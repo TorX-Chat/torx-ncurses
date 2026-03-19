@@ -748,6 +748,8 @@ static int widget_text(WINDOW *win,size_t *y,size_t *x,const size_t max_height,c
 		error_simple(-1,"widget_text passed an inappropriate type. UI coding error. Report this.");
 		return 0;
 	}
+	if(!max_height || !max_width)
+		return 0;
 	const size_t start_y = *y, start_x = *x;
 	size_t text_len = (text_p && *text_p) ? strlen(*text_p) : 0;
 	if(WIDGET_OUTPUT_MULTI_LINE && text_len && (*text_p)[text_len-1] == '\n')
@@ -1037,9 +1039,10 @@ static int keypress(const int w, const wint_t ch)
 {
 	if(w >= (int)(torx_allocation_len(widget) / sizeof(struct widget)))
 	{ // XXX Due to zero indexing, it will likely show "10 of 10" which is indeed an error.
-		error_printf(0,"Keypress called on possibly invalid widget: %d of %lu",w,torx_allocation_len(widget) / sizeof(struct widget));
-		go_back(1);
-		return 0; // Sanity check
+		*current_focus = -1;
+		error_printf(0,"Keypress called on invalid widget: %d of %lu. Resized=%d",w,torx_allocation_len(widget) / sizeof(struct widget),resized);
+	//	go_back(1);
+		return 1; // Sanity check
 	}
 	uint8_t goneto = 0;
 	const size_t max_height = subtract_size(screen_rows,3); // TODO this should be specific to each page
@@ -1288,6 +1291,7 @@ static int keypress(const int w, const wint_t ch)
 		}
 		beep();
 	}
+	error_printf(0,"Keypress not rebuilding. Resized=%d",resized);
 	return 0; // Do not rebuild
 }
 
@@ -3573,13 +3577,13 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 			message[peernick_len - 1] = ' '; // space after peernick
 		}
 		size_t anticipated_lines = 1 + print_wrap(NULL,NULL,NULL,inner_width,message,printable_len);
-		if(win && ((anticipated_lines + processed_lines > must_be_processed_lines - height_of_scrollable) || must_be_processed_lines < height_of_scrollable))
+		if(win && anticipated_lines + processed_lines > subtract_size(must_be_processed_lines,height_of_scrollable))
 		{ // we are ACTUALLY printing
 			const size_t required_offset = subtract_size(chat_scroll_lines,processed_lines);
 			size_t truncation = 0; // number of characters truncated from the end
 			if(required_offset)
 			{ // Some of the message was already processed. Truncation required XXX Must do BEFORE calculating offset.
-				anticipated_lines -= required_offset; // XXX reducing anticipated lines from the end
+				anticipated_lines = subtract_size(anticipated_lines,required_offset); // XXX reducing anticipated lines from the end
 				size_t tmp_iter = 0;
 				for(size_t found_lines = 0; found_lines < anticipated_lines; found_lines++)
 				{ // Need to find point of necessary truncation, if applicable (printing only first part of message)
@@ -3768,7 +3772,7 @@ static void draw_chat(void)
 		min_i = getter_int(n,INT_MIN,-1,offsetof(struct peer_list,min_i));
 		msg_count = max_i + 1 - min_i;
 	}
-	chat_scroll_jump = mid - TOP_LINE_HEIGHT;
+	chat_scroll_jump = subtract_size(mid,TOP_LINE_HEIGHT);
 	chat_scroll_max = 0; // must reset
 	widgets_existing_before_scrollable = torx_allocation_len(widget) / sizeof(struct widget);
 	// Print message history
