@@ -110,6 +110,11 @@ static inline void initialize_library(void (*callback)(void))
 #define minimum_size_horizontal 20 // Do not eliminate this or we have to go back to using int instead of size_t and checking for negative values
 #define minimum_size_vertical 2
 
+static inline size_t subtract_size(const size_t a,const size_t b)
+{ // Safely subtract. Prevents size_t underflow.
+	return a > b ? a - b : 0;
+}
+
 static void signal_resize(int sig);
 static void draw_login(void);
 static void draw_requests(void);
@@ -495,14 +500,14 @@ static const char *text_incoming_call = {0};
 
 static inline size_t align_right(size_t length)
 { // WARNING: Use torx_utf8len not strlen
-	if(length > screen_cols)
+	if(length + 2 >= screen_cols)
 		return 2; // Safety
 	return screen_cols - length - 2;
 }
 
 static inline size_t align_center(size_t length)
 { // WARNING: Use torx_utf8len not strlen
-	if(length > screen_cols)
+	if(length >= screen_cols)
 		return 2; // Safety
 	return (screen_cols - length) / 2;
 }
@@ -544,7 +549,7 @@ static inline size_t cursor_back(const char* str,const size_t cur)
 	if(!str || !cur)
 		return 0;
 	size_t byte_movement = 1;
-	for(size_t ret,iter = 1; (ret = mbrtowc(NULL, &str[cur - iter], iter, NULL)) == (size_t)-1 || ret == (size_t)-2; iter++)
+	for(size_t ret,iter = 1; (ret = mbrtowc(NULL, &str[subtract_size(cur,iter)], iter, NULL)) == (size_t)-1 || ret == (size_t)-2; iter++)
 		byte_movement += 1;
 	return byte_movement;
 }
@@ -679,7 +684,7 @@ static void widget_clear(int *new_focus)
 	if(new_focus)
 	{ // We're preparing to draw a new window
 		getmaxyx_size(stdscr, &screen_rows, &screen_cols); // 2nd
-		inner_width = screen_cols - 2; // 0 or 2 or 4 both acceptable,etc. Must be even.
+		inner_width = subtract_size(screen_cols,2); // 0 or 2 or 4 both acceptable,etc. Must be even.
 		current_focus = new_focus;
 		widget_set_cursor(0,0); // set to a safe place
 		curs_set(0); // set invisible
@@ -1037,7 +1042,7 @@ static int keypress(const int w, const wint_t ch)
 		return 0; // Sanity check
 	}
 	uint8_t goneto = 0;
-	const size_t max_height = screen_rows - 3; // TODO this should be specific to each page
+	const size_t max_height = subtract_size(screen_rows,3); // TODO this should be specific to each page
 	if(ch == KEY_ESC || ch == KEY_HOME)
 		go_back(1);
 	else if(w > - 1 && (ch == L'\t' || ch == KEY_BTAB))
@@ -1313,11 +1318,11 @@ static void draw_login(void)
 
 	size_t fy = 0, fx = 2;
 	wattron(win,A_BOLD); // bold on
-	print_nowrap(win,&fy,&fx,screen_cols-(fx*2),text_welcome,strlen(text_welcome));
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,fx*2),text_welcome,strlen(text_welcome));
 	wattroff(win,A_BOLD); // bold off
 
 //	fy = screen_rows-2, fx = 2; // Drawing bottom first because it is less important
-//	print_wrap(win, &fy, &fx, screen_cols-(fx*2), text_navigation_basic, strlen(text_navigation_basic));
+//	print_wrap(win, &fy, &fx, subtract_size(screen_cols,fx*2), text_navigation_basic, strlen(text_navigation_basic));
 
 	fy = 0; // back to top
 	draw_scrollable(win,&fy,&fx,&focus_login,&login_scroll_offset);
@@ -2124,9 +2129,9 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			else if(!strncmp(language,languages_available_code[1],5))
 				selected = languages_available_name[1];
 			*fyp += 2, *fxp = 2;
-			print_wrap(win, fyp, fxp, screen_cols-(*fxp*2), text_set_select_language, strlen(text_set_select_language));
+			print_wrap(win, fyp, fxp, subtract_size(screen_cols,*fxp*2), text_set_select_language, strlen(text_set_select_language));
 			*fyp += 1,*fxp = align_right(torx_utf8len(selected));
-			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_language,selected);
+			widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2),callback_language,selected);
 		}
 		else if(item_to_draw == 1)
 		{ // Select color scheme
@@ -2135,9 +2140,9 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			else
 				selected = text_dark;
 			*fyp += 2, *fxp = 2;
-			print_wrap(win, fyp, fxp, screen_cols-(*fxp*2), text_set_select_theme, strlen(text_set_select_theme));
+			print_wrap(win, fyp, fxp, subtract_size(screen_cols,*fxp*2), text_set_select_theme, strlen(text_set_select_theme));
 			*fyp += 1,*fxp = align_right(torx_utf8len(selected));
-			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_theme,selected);
+			widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2),callback_theme,selected);
 		}
 		else if(item_to_draw == 2)
 		{ // TorX-ID (<=52 char) or OnionID (56 char with checksum)
@@ -2146,9 +2151,9 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			else
 				selected = text_generate_onionid;
 			*fyp += 2, *fxp = 2;
-			print_wrap(win, fyp, fxp, screen_cols-(2*2), text_set_onionid_or_torxid, strlen(text_set_onionid_or_torxid));
+			print_wrap(win, fyp, fxp, subtract_size(screen_cols,2*2), text_set_onionid_or_torxid, strlen(text_set_onionid_or_torxid));
 			*fyp += 1,*fxp = align_right(torx_utf8len(selected));
-			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_onionid_or_torxid,selected);
+			widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2),callback_onionid_or_torxid,selected);
 		}
 		else if(item_to_draw == 3)
 		{ // Message Logging (Global Default)
@@ -2157,73 +2162,73 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			else
 				selected = text_disable;
 			*fyp += 2, *fxp = 2;
-			print_wrap(win, fyp, fxp, screen_cols-(2*2), text_set_global_log, strlen(text_set_global_log));
+			print_wrap(win, fyp, fxp, subtract_size(screen_cols,2*2), text_set_global_log, strlen(text_set_global_log));
 			*fyp += 1,*fxp = align_right(torx_utf8len(selected));
-			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_global_log_messages,selected);
+			widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2),callback_global_log_messages,selected);
 		}
 		else if(item_to_draw == 4)
 		{ // Select Tor binary location (effective immediately)
 			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_tor,text_binary_location);
 			*fyp += 2, *fxp = 2;
-			print_wrap(win, fyp, fxp, screen_cols-(2*2), label_text, len);
+			print_wrap(win, fyp, fxp, subtract_size(screen_cols,2*2), label_text, len);
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_tor_location));
-			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_tor_location,WIDGET_INPUT_SINGLE_LINE,&tmp_tor_location,&tmp_tor_location_pos);
+			widget_text(win,fyp,fxp,1,subtract_size(screen_cols,2*2),callback_tor_location,WIDGET_INPUT_SINGLE_LINE,&tmp_tor_location,&tmp_tor_location_pos);
 			sodium_memzero(label_text,len);
 		}
 		else if(item_to_draw == 5)
 		{ // Select Snowflake binary location (effective immediately)
 			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_snowflake,text_binary_location);
 			*fyp += 2, *fxp = 2;
-			print_wrap(win, fyp, fxp, screen_cols-(2*2), label_text, len);
+			print_wrap(win, fyp, fxp, subtract_size(screen_cols,2*2), label_text, len);
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_snowflake_location));
-			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_snowflake_location,WIDGET_INPUT_SINGLE_LINE,&tmp_snowflake_location,&tmp_snowflake_location_pos);
+			widget_text(win,fyp,fxp,1,subtract_size(screen_cols,2*2),callback_snowflake_location,WIDGET_INPUT_SINGLE_LINE,&tmp_snowflake_location,&tmp_snowflake_location_pos);
 			sodium_memzero(label_text,len);
 		}
 		else if(item_to_draw == 6)
 		{ // Select Lyrebird binary location (effective immediately)
 			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_lyrebird,text_binary_location);
 			*fyp += 2, *fxp = 2;
-			print_wrap(win, fyp, fxp, screen_cols-(2*2), label_text, len);
+			print_wrap(win, fyp, fxp, subtract_size(screen_cols,2*2), label_text, len);
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_lyrebird_location));
-			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_lyrebird_location,WIDGET_INPUT_SINGLE_LINE,&tmp_lyrebird_location,&tmp_lyrebird_location_pos);
+			widget_text(win,fyp,fxp,1,subtract_size(screen_cols,2*2),callback_lyrebird_location,WIDGET_INPUT_SINGLE_LINE,&tmp_lyrebird_location,&tmp_lyrebird_location_pos);
 			sodium_memzero(label_text,len);
 		}
 		else if(item_to_draw == 7)
 		{ // Select Conjure binary location (effective immediately)
 			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_conjure,text_binary_location);
 			*fyp += 2, *fxp = 2;
-			print_wrap(win, fyp, fxp, screen_cols-(2*2), label_text, len);
+			print_wrap(win, fyp, fxp, subtract_size(screen_cols,2*2), label_text, len);
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_conjure_location));
-			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_conjure_location,WIDGET_INPUT_SINGLE_LINE,&tmp_conjure_location,&tmp_conjure_location_pos);
+			widget_text(win,fyp,fxp,1,subtract_size(screen_cols,2*2),callback_conjure_location,WIDGET_INPUT_SINGLE_LINE,&tmp_conjure_location,&tmp_conjure_location_pos);
 			sodium_memzero(label_text,len);
 		}
 		else if(item_to_draw == 8)
 		{ // Maximum CPU threads for TorX-ID generation
 			*fyp += 2, *fxp = 2;
-			print_wrap(win, fyp, fxp, screen_cols-(2*2), text_set_cpu, strlen(text_set_cpu));
+			print_wrap(win, fyp, fxp, subtract_size(screen_cols,2*2), text_set_cpu, strlen(text_set_cpu));
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_threads_max));
-			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_threads,WIDGET_INPUT_NUMERICAL,&tmp_threads_max,&tmp_threads_max_pos);
+			widget_text(win,fyp,fxp,1,subtract_size(screen_cols,2*2),callback_threads,WIDGET_INPUT_NUMERICAL,&tmp_threads_max,&tmp_threads_max_pos);
 		}
 		else if(item_to_draw == 9)
 		{ // Minimum Suffix Length for TorX-ID generation
 			*fyp += 2, *fxp = 2;
-			print_wrap(win, fyp, fxp, screen_cols-(2*2), text_set_suffix, strlen(text_set_suffix));
+			print_wrap(win, fyp, fxp, subtract_size(screen_cols,2*2), text_set_suffix, strlen(text_set_suffix));
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_suffix_length));
-			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_suffix,WIDGET_INPUT_NUMERICAL,&tmp_suffix_length,&tmp_suffix_length_pos);
+			widget_text(win,fyp,fxp,1,subtract_size(screen_cols,2*2),callback_suffix,WIDGET_INPUT_NUMERICAL,&tmp_suffix_length,&tmp_suffix_length_pos);
 		}
 		else if(item_to_draw == 10)
 		{ // Single-Use TorX-ID expiration time (days)
 			*fyp += 2, *fxp = 2;
-			print_wrap(win, fyp, fxp, screen_cols-(2*2), text_set_validity_sing, strlen(text_set_validity_sing));
+			print_wrap(win, fyp, fxp, subtract_size(screen_cols,2*2), text_set_validity_sing, strlen(text_set_validity_sing));
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_sing_expiration_days));
-			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_sing_days,WIDGET_INPUT_NUMERICAL,&tmp_sing_expiration_days,&tmp_sing_expiration_days_pos);
+			widget_text(win,fyp,fxp,1,subtract_size(screen_cols,2*2),callback_sing_days,WIDGET_INPUT_NUMERICAL,&tmp_sing_expiration_days,&tmp_sing_expiration_days_pos);
 		}
 		else if(item_to_draw == 11)
 		{ // Multiple-Use TorX-ID expiration time (days)
 			*fyp += 2, *fxp = 2;
-			print_wrap(win, fyp, fxp, screen_cols-(2*2), text_set_validity_mult, strlen(text_set_validity_mult));
+			print_wrap(win, fyp, fxp, subtract_size(screen_cols,2*2), text_set_validity_mult, strlen(text_set_validity_mult));
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_mult_expiration_days));
-			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_mult_dats,WIDGET_INPUT_NUMERICAL,&tmp_mult_expiration_days,&tmp_mult_expiration_days_pos);
+			widget_text(win,fyp,fxp,1,subtract_size(screen_cols,2*2),callback_mult_dats,WIDGET_INPUT_NUMERICAL,&tmp_mult_expiration_days,&tmp_mult_expiration_days_pos);
 		}
 		else if(item_to_draw == 12)
 		{ // Automatically Accept Incoming Mult Requests
@@ -2232,30 +2237,30 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			else
 				selected = text_disable;
 			*fyp += 2, *fxp = 2;
-			print_wrap(win, fyp, fxp, screen_cols-(2*2), text_set_auto_mult, strlen(text_set_auto_mult));
+			print_wrap(win, fyp, fxp, subtract_size(screen_cols,2*2), text_set_auto_mult, strlen(text_set_auto_mult));
 			*fyp += 1,*fxp = align_right(torx_utf8len(selected));
-			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_auto_mult,selected);
+			widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2),callback_auto_mult,selected);
 		}
 		else if(item_to_draw == 13)
 		{ // Tor SOCKS5 Port
 			*fyp += 2, *fxp = 2;
-			print_wrap(win, fyp, fxp, screen_cols-(2*2), text_set_tor_port_socks, strlen(text_set_tor_port_socks));
+			print_wrap(win, fyp, fxp, subtract_size(screen_cols,2*2), text_set_tor_port_socks, strlen(text_set_tor_port_socks));
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_tor_socks_port));
-			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_socks_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_socks_port,&tmp_tor_socks_port_pos);
+			widget_text(win,fyp,fxp,1,subtract_size(screen_cols,2*2),callback_socks_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_socks_port,&tmp_tor_socks_port_pos);
 		}
 		else if(item_to_draw == 14)
 		{ // Tor Control Port
 			*fyp += 2, *fxp = 2;
-			print_wrap(win, fyp, fxp, screen_cols-(2*2), text_set_tor_port_ctrl, strlen(text_set_tor_port_ctrl));
+			print_wrap(win, fyp, fxp, subtract_size(screen_cols,2*2), text_set_tor_port_ctrl, strlen(text_set_tor_port_ctrl));
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_tor_ctrl_port));
-			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_ctrl_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_ctrl_port,&tmp_tor_ctrl_port_pos);
+			widget_text(win,fyp,fxp,1,subtract_size(screen_cols,2*2),callback_ctrl_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_ctrl_port,&tmp_tor_ctrl_port_pos);
 		}
 		else if(item_to_draw == 15)
 		{ // Tor Control Password
 			*fyp += 2, *fxp = 2;
-			print_wrap(win, fyp, fxp, screen_cols-(2*2), text_set_tor_password, strlen(text_set_tor_password));
+			print_wrap(win, fyp, fxp, subtract_size(screen_cols,2*2), text_set_tor_password, strlen(text_set_tor_password));
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_control_password_clear));
-			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_ctrl_pass,WIDGET_INPUT_SINGLE_LINE,&tmp_control_password_clear,&tmp_control_password_clear_pos);
+			widget_text(win,fyp,fxp,1,subtract_size(screen_cols,2*2),callback_ctrl_pass,WIDGET_INPUT_SINGLE_LINE,&tmp_control_password_clear,&tmp_control_password_clear_pos);
 			return 0; // Printed last (XXX IMPORTANT: sets more_to_print XXX)
 		}
 		else
@@ -2266,9 +2271,9 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 		if(item_to_draw == 0)
 		{ // Rename text_entry
 			*fyp += 2, *fxp = 2;
-			print_wrap(win, fyp, fxp, screen_cols-(2*2), text_identifier, strlen(text_identifier));
+			print_wrap(win, fyp, fxp, subtract_size(screen_cols,2*2), text_identifier, strlen(text_identifier));
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_rename));
-			widget_text(win,fyp,fxp,1,screen_cols-(2*2),callback_rename,WIDGET_INPUT_SINGLE_LINE,&tmp_rename,&tmp_rename_pos);
+			widget_text(win,fyp,fxp,1,subtract_size(screen_cols,2*2),callback_rename,WIDGET_INPUT_SINGLE_LINE,&tmp_rename,&tmp_rename_pos);
 		}
 		else if(item_to_draw == 1)
 		{
@@ -2276,12 +2281,12 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			{ // Active checkbox
 				const uint8_t status = getter_uint8(treeview_n,INT_MIN,-1,offsetof(struct peer_list,status));
 				*fyp += 2, *fxp = align_right(torx_utf8len(text_active) + 4);
-				widget_checkbox(win,fyp,fxp,screen_cols-(2*2),callback_toggle_block,1,text_active,status == ENUM_STATUS_FRIEND ? 1 : 0);
+				widget_checkbox(win,fyp,fxp,subtract_size(screen_cols,2*2),callback_toggle_block,1,text_active,status == ENUM_STATUS_FRIEND ? 1 : 0);
 			}
 			else if(window_requests_popover && !outgoing_mode)
 			{ // Accept Incoming request button
 				*fyp += 1, *fxp = align_right(torx_utf8len(text_accept));
-				widget_button(win,fyp,fxp,screen_cols-(2*2),callback_peer_accept,text_accept);
+				widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2),callback_peer_accept,text_accept);
 			}
 		}
 		else if(item_to_draw == 2)
@@ -2289,7 +2294,7 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			char label[256];
 			snprintf(label,sizeof(label),"[ %s ]",window_requests_popover && !outgoing_mode ? text_reject : text_delete);
 			*fyp += 2, *fxp = align_right(torx_utf8len(label));
-			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_peer_delete,label);
+			widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2),callback_peer_delete,label);
 			sodium_memzero(label,sizeof(label));
 			return 0; // Printed last (XXX IMPORTANT: sets more_to_print XXX)
 		}
@@ -2301,19 +2306,19 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 		if(item_to_draw == 0)
 		{
 			*fyp += 2, *fxp = 2;
-			print_wrap(win,fyp,fxp,screen_cols-(*fxp*2),text_password,strlen(text_password));
+			print_wrap(win,fyp,fxp,subtract_size(screen_cols,*fxp*2),text_password,strlen(text_password));
 			*fyp += 1, *fxp = 4;
-			widget_text(win,fyp,fxp,screen_rows-*fyp,screen_cols-(*fxp*2),callback_password,WIDGET_PASSWORD,&password,&pw_cursor);
+			widget_text(win,fyp,fxp,subtract_size(screen_rows,*fyp),subtract_size(screen_cols,*fxp*2),callback_password,WIDGET_PASSWORD,&password,&pw_cursor);
 		}
 		else if(item_to_draw == 1)
 		{
 			*fyp += 2,*fxp = 4;
-			widget_checkbox(win,fyp,fxp,screen_cols-(*fxp*2),callback_pw_show,1,text_show_password,pw_show);
+			widget_checkbox(win,fyp,fxp,subtract_size(screen_cols,*fxp*2),callback_pw_show,1,text_show_password,pw_show);
 		}
 		else if(item_to_draw == 2)
 		{
 			*fyp += 1, *fxp = 4;
-			widget_checkbox(win,fyp,fxp,screen_cols-(*fxp*2),callback_censored_region,1,text_censored_region,threadsafe_read_uint8(&mutex_global_variable,&censored_region));
+			widget_checkbox(win,fyp,fxp,subtract_size(screen_cols,*fxp*2),callback_censored_region,1,text_censored_region,threadsafe_read_uint8(&mutex_global_variable,&censored_region));
 			return 0; // Printed last (XXX IMPORTANT: sets more_to_print XXX)
 		}
 		else
@@ -2324,23 +2329,23 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 		if(item_to_draw == 0)
 		{
 			*fyp += 2, *fxp = align_center(torx_utf8len(text_old_password));
-			print_wrap(win,fyp,fxp,screen_cols-(2*2),text_old_password,strlen(text_old_password));
+			print_wrap(win,fyp,fxp,subtract_size(screen_cols,2*2),text_old_password,strlen(text_old_password));
 			*fyp += 1, *fxp = align_center(torx_utf8len(password_old));
-			widget_text(win,fyp,fxp,screen_rows-*fyp,screen_cols-(2*2),NULL,WIDGET_PASSWORD,&password_old,&pw_old_cursor);
+			widget_text(win,fyp,fxp,subtract_size(screen_rows,*fyp),subtract_size(screen_cols,2*2),NULL,WIDGET_PASSWORD,&password_old,&pw_old_cursor);
 		}
 		else if(item_to_draw == 1)
 		{
 			*fyp += 2, *fxp = align_center(torx_utf8len(text_new_password));
-			print_wrap(win,fyp,fxp,screen_cols-(2*2),text_new_password,strlen(text_new_password));
+			print_wrap(win,fyp,fxp,subtract_size(screen_cols,2*2),text_new_password,strlen(text_new_password));
 			*fyp += 1, *fxp = align_center(torx_utf8len(password_new));
-			widget_text(win,fyp,fxp,screen_rows-*fyp,screen_cols-(2*2),NULL,WIDGET_PASSWORD,&password_new,&pw_new_cursor);
+			widget_text(win,fyp,fxp,subtract_size(screen_rows,*fyp),subtract_size(screen_cols,2*2),NULL,WIDGET_PASSWORD,&password_new,&pw_new_cursor);
 		}
 		else if(item_to_draw == 2)
 		{
 			*fyp += 2, *fxp = align_center(torx_utf8len(text_new_password_again));
-			print_wrap(win,fyp,fxp,screen_cols-(2*2),text_new_password_again,strlen(text_new_password_again));
+			print_wrap(win,fyp,fxp,subtract_size(screen_cols,2*2),text_new_password_again,strlen(text_new_password_again));
 			*fyp += 1, *fxp = align_center(torx_utf8len(password_verify));
-			widget_text(win,fyp,fxp,screen_rows-*fyp,screen_cols-(2*2),NULL,WIDGET_PASSWORD,&password_verify,&pw_verify_cursor);
+			widget_text(win,fyp,fxp,subtract_size(screen_rows,*fyp),subtract_size(screen_cols,2*2),NULL,WIDGET_PASSWORD,&password_verify,&pw_verify_cursor);
 		}
 		else if(item_to_draw == 3)
 		{
@@ -2354,7 +2359,7 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 		else if(item_to_draw == 4)
 		{
 			*fyp += 1,*fxp = align_center(4 + torx_utf8len(text_show_password)); // 4 + is for [ ]
-			widget_checkbox(win,fyp,fxp,screen_cols-(2*2),callback_pw_show,1,text_show_password,pw_show);
+			widget_checkbox(win,fyp,fxp,subtract_size(screen_cols,2*2),callback_pw_show,1,text_show_password,pw_show);
 			return 0; // Printed last (XXX IMPORTANT: sets more_to_print XXX)
 		}
 		else
@@ -2366,19 +2371,19 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 		{
 			wattron(win,A_BOLD); // bold on
 			*fyp += 2, *fxp = align_center(torx_utf8len(generate_group_mode ? text_add_group_by : text_add_peer_by));
-			print_wrap(win,fyp,fxp,screen_cols-(2*2),generate_group_mode ? text_add_group_by : text_add_peer_by,strlen(generate_group_mode ? text_add_group_by : text_add_peer_by));
+			print_wrap(win,fyp,fxp,subtract_size(screen_cols,2*2),generate_group_mode ? text_add_group_by : text_add_peer_by,strlen(generate_group_mode ? text_add_group_by : text_add_peer_by));
 			wattroff(win,A_BOLD); // bold off
 			*fyp += 2, *fxp = align_center(torx_utf8len(generate_group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier));
-			print_wrap(win,fyp,fxp,screen_cols-(2*2),generate_group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier,strlen(generate_group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier));
+			print_wrap(win,fyp,fxp,subtract_size(screen_cols,2*2),generate_group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier,strlen(generate_group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier));
 			*fyp += 1, *fxp = align_center(torx_utf8len(add_identifier));
-			widget_text(win,fyp,fxp,screen_rows-*fyp,screen_cols-(2*2),NULL,WIDGET_INPUT_SINGLE_LINE,&add_identifier,&add_identifier_cursor);
+			widget_text(win,fyp,fxp,subtract_size(screen_rows,*fyp),subtract_size(screen_cols,2*2),NULL,WIDGET_INPUT_SINGLE_LINE,&add_identifier,&add_identifier_cursor);
 		}
 		else if(item_to_draw == 1)
 		{
 			*fyp += 2, *fxp = align_center(torx_utf8len(generate_group_mode ? text_placeholder_add_group_id : text_placeholder_add_onion));
-			print_wrap(win,fyp,fxp,screen_cols-(2*2),generate_group_mode ? text_placeholder_add_group_id : text_placeholder_add_onion,strlen(generate_group_mode ? text_placeholder_add_group_id : text_placeholder_add_onion));
+			print_wrap(win,fyp,fxp,subtract_size(screen_cols,2*2),generate_group_mode ? text_placeholder_add_group_id : text_placeholder_add_onion,strlen(generate_group_mode ? text_placeholder_add_group_id : text_placeholder_add_onion));
 			*fyp += 1, *fxp = align_center(torx_utf8len(add_id));
-			widget_text(win,fyp,fxp,screen_rows-*fyp,screen_cols-(2*2),NULL,WIDGET_INPUT_SINGLE_LINE,&add_id,&add_id_cursor);
+			widget_text(win,fyp,fxp,subtract_size(screen_rows,*fyp),subtract_size(screen_cols,2*2),NULL,WIDGET_INPUT_SINGLE_LINE,&add_id,&add_id_cursor);
 		}
 		else if(item_to_draw == 2)
 		{
@@ -2393,12 +2398,12 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 		{
 			wattron(win,A_BOLD); // bold on
 			*fyp += 2, *fxp = align_center(torx_utf8len(generate_group_mode ? text_generate_group_for : text_generate_for));
-			print_wrap(win,fyp,fxp,screen_cols-(2*2),generate_group_mode ? text_generate_group_for : text_generate_for,strlen(generate_group_mode ? text_generate_group_for : text_generate_for));
+			print_wrap(win,fyp,fxp,subtract_size(screen_cols,2*2),generate_group_mode ? text_generate_group_for : text_generate_for,strlen(generate_group_mode ? text_generate_group_for : text_generate_for));
 			wattroff(win,A_BOLD); // bold off
 			*fyp += 2, *fxp = align_center(torx_utf8len(generate_group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier));
-			print_wrap(win,fyp,fxp,screen_cols-(2*2),generate_group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier,strlen(generate_group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier));
+			print_wrap(win,fyp,fxp,subtract_size(screen_cols,2*2),generate_group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier,strlen(generate_group_mode ? text_placeholder_add_group_identifier : text_placeholder_add_identifier));
 			*fyp += 1, *fxp = align_center(torx_utf8len(generate_input));
-			widget_text(win,fyp,fxp,screen_rows-*fyp,screen_cols-(2*2),NULL,WIDGET_INPUT_SINGLE_LINE,&generate_input,&generate_input_cursor);
+			widget_text(win,fyp,fxp,subtract_size(screen_rows,*fyp),subtract_size(screen_cols,2*2),NULL,WIDGET_INPUT_SINGLE_LINE,&generate_input,&generate_input_cursor);
 		}
 		else if(item_to_draw == 4)
 		{
@@ -2419,7 +2424,7 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			if(generate_output)
 			{
 				*fyp += 2, *fxp = align_center(torx_utf8len(generate_output));
-				print_wrap(win,fyp,fxp,screen_cols-(2*2),generate_output,torx_allocation_len(generate_output) - 1);
+				print_wrap(win,fyp,fxp,subtract_size(screen_cols,2*2),generate_output,torx_allocation_len(generate_output) - 1);
 			}
 			sodium_memzero(label,sizeof(label));
 			return 0; // Printed last (XXX IMPORTANT: sets more_to_print XXX)
@@ -2445,7 +2450,7 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			else if(log_messages == 1)
 				selected = text_tooltip_logging_enabled;
 			*fyp += 2, *fxp = 2;
-			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_chat_logging,selected);
+			widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2),callback_chat_logging,selected);
 		}
 		else if(item_to_draw == 1)
 		{
@@ -2455,7 +2460,7 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			else
 				selected = text_tooltip_notifications_on;
 			*fyp += 2, *fxp = 2;
-			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_chat_notifications,selected);
+			widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2),callback_chat_notifications,selected);
 		}
 		else if(item_to_draw == 2)
 		{
@@ -2466,22 +2471,22 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			else
 				selected = text_tooltip_blocked_off;
 			*fyp += 2, *fxp = 2;
-			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_chat_block,selected);
+			widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2),callback_chat_block,selected);
 		}
 		else if(item_to_draw == 3)
 		{
 			*fyp += 2, *fxp = 2;
-			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_chat_kill,text_tooltip_button_kill);
+			widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2),callback_chat_kill,text_tooltip_button_kill);
 		}
 		else if(item_to_draw == 4)
 		{
 			*fyp += 2, *fxp = 2;
-			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_chat_delete,text_tooltip_button_delete);
+			widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2),callback_chat_delete,text_tooltip_button_delete);
 		}
 		else if(item_to_draw == 5)
 		{
 			*fyp += 2, *fxp = 2;
-			widget_button(win,fyp,fxp,screen_cols-(2*2),callback_chat_clear,text_tooltip_button_delete_log);
+			widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2),callback_chat_clear,text_tooltip_button_delete_log);
 			return 0; // Printed last (XXX IMPORTANT: sets more_to_print XXX)
 		}
 		else
@@ -2499,7 +2504,7 @@ static void draw_requests_popover(void)
 
 	size_t fy = 0,fx = 2;
 	wattron(win,A_BOLD); // bold on
-	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_edit,strlen(text_edit));
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),text_edit,strlen(text_edit));
 	wattroff(win,A_BOLD); // bold off
 
 	fy = 0; // back to top
@@ -2515,7 +2520,7 @@ static void draw_ids_popover(void)
 
 	size_t fy = 0,fx = 2;
 	wattron(win,A_BOLD); // bold on
-	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_edit,strlen(text_edit));
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),text_edit,strlen(text_edit));
 	wattroff(win,A_BOLD); // bold off
 
 	fy = 0; // back to top
@@ -2589,12 +2594,12 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 	{ // ui_populate_peer_popover / ui_populate_group_peerlist_popover
 		int len;
 		int *array = refined_list(&len,window_group_invite ? ENUM_OWNER_CTRL : ENUM_OWNER_GROUP_PEER,window_group_invite ? ENUM_STATUS_FRIEND : global_group,search);
-		while((int)iter < len && *fyp < screen_rows - 2)
+		while((int)iter < len && *fyp < subtract_size(screen_rows,2))
 		{
 			*fyp += 1,*fxp = 2;
 			const int n = array[iter++];
 			char *peernick = getter_string(n,INT_MIN,-1,offsetof(struct peer_list,peernick));
-			if(widget_button(win,fyp,fxp,screen_cols-(2*2)+1,window_group_invite ? callback_invite : callback_pm,peernick) == *focus) // the +1 is to prevent wrapping
+			if(widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2)+1,window_group_invite ? callback_invite : callback_pm,peernick) == *focus) // the +1 is to prevent wrapping
 				treeview_n = n;
 			torx_free((void*)&peernick);
 		}
@@ -2614,8 +2619,8 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 			array = refined_list(&len,ENUM_OWNER_CTRL,ENUM_STATUS_BLOCKED,search);
 		if(len)
 		{
-			char label[screen_cols - (2*2) + 1];
-			while((int)iter < len && *fyp < screen_rows - 2)
+			char label[subtract_size(screen_cols,2*2) + 1];
+			while((int)iter < len && *fyp < subtract_size(screen_rows,2))
 			{
 				*fyp += 1,*fxp = 2;
 				const int n = array[iter++];
@@ -2628,7 +2633,7 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 					snprintf(label, sizeof(label), "%s", peernick);
 				if(sendfd_connected || recvfd_connected)
 					wattron(win,A_BOLD); // bold on
-				const int w = widget_button(win,fyp,fxp,screen_cols-(2*2),callback_peer,label);
+				const int w = widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2),callback_peer,label);
 				if(*focus == w)
 					selected_n = n;
 				if(sendfd_connected || recvfd_connected)
@@ -2652,9 +2657,9 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 		if(len)
 		{
 			const uint8_t shorten_torxids_local = threadsafe_read_uint8(&mutex_global_variable,&shorten_torxids);
-			char label[screen_cols - (2*2) + 1];
+			char label[subtract_size(screen_cols,2*2) + 1];
 			char onion[56+1]; // zero'd
-			while((int)iter < len && *fyp < screen_rows - 2)
+			while((int)iter < len && *fyp < subtract_size(screen_rows,2))
 			{
 				*fyp += 1,*fxp = 2;
 				const int n = array[iter++];
@@ -2670,7 +2675,7 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 				}
 				else // if(win == window_requests)
 					snprintf(label,sizeof(label),"%s %s",peernick,onion);
-				if(widget_button(win,fyp,fxp,screen_cols-(2*2)+1,callback_popover,label) == *focus) // the +1 is to prevent wrapping
+				if(widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2)+1,callback_popover,label) == *focus) // the +1 is to prevent wrapping
 					treeview_n = n;
 				torx_free((void*)&peernick);
 			}
@@ -2684,12 +2689,12 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 	else
 	{
 		int ret;
-		while((ret = scrollable(win,fyp,fxp,iter)) && *fyp < screen_rows - 2)
+		while((ret = scrollable(win,fyp,fxp,iter)) && *fyp < subtract_size(screen_rows,2))
 			iter++; // Draw widgets until there is no space left on the screen
 		if(ret) // cut off or didn't print all
 			more_to_print = 1;
 	}
-	if(*fyp > screen_rows - 2) // Draw border again (if we ran over it with scrollable)
+	if(*fyp > subtract_size(screen_rows,2)) // Draw border again (if we ran over it with scrollable)
 	{ // DO NOT MODIFY
 		if(torx_allocation_len(widget) / sizeof(struct widget) - widgets_existing_before_scrollable > 1 && *focus + 1 == (int)(torx_allocation_len(widget) / sizeof(struct widget)))
 		{ // VERY IMPORTANT. Do not modify! When (scrollable widgets > 1 && current focus is on a partially printed widget)
@@ -2700,7 +2705,7 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 		}
 		else
 			for(size_t x = 1; x + 1 < screen_cols; x++)
-				mvwaddch(win, (int)screen_rows-1, (int)x, ACS_HLINE);
+				mvwaddch(win, (int)subtract_size(screen_rows,1), (int)x, ACS_HLINE);
 	}
 }
 
@@ -2730,7 +2735,7 @@ static void draw_settings(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_settings,strlen(text_settings));
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),text_settings,strlen(text_settings));
 	wattroff(win,A_BOLD); // bold off
 
 	char label[256];
@@ -2790,7 +2795,7 @@ static void draw_logs(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	print_nowrap(win,&fy,&fx,screen_cols-(2*2),tor_log_mode ? text_tor_log : text_torx_log,strlen(tor_log_mode ? text_tor_log : text_torx_log));
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),tor_log_mode ? text_tor_log : text_torx_log,strlen(tor_log_mode ? text_tor_log : text_torx_log));
 	wattroff(win,A_BOLD); // bold off
 
 	char label[256];
@@ -2802,14 +2807,14 @@ static void draw_logs(void)
 	if(!tor_log_mode)
 	{ // TorX logging level
 		fy -= 1, fx = align_right(utf8len) - 1 - torx_utf8len(text_debug_level) - 2;
-		print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_debug_level,strlen(text_debug_level));
+		print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),text_debug_level,strlen(text_debug_level));
 		fx = align_right(utf8len) - 2;
-		widget_text(win,&fy,&fx,screen_rows - 2,inner_width,callback_debug_level,WIDGET_INPUT_NUMERICAL,&tmp_debug_level,&tmp_debug_level_pos);
+		widget_text(win,&fy,&fx,subtract_size(screen_rows,2),inner_width,callback_debug_level,WIDGET_INPUT_NUMERICAL,&tmp_debug_level,&tmp_debug_level_pos);
 		fy += 1;
 	}
 if(tor_log_mode) error_simple(0,"Checkpoint scroll 1");
 	fx = align_center(inner_width);
-	widget_text(win,&fy,&fx,screen_rows - 2,inner_width,NULL,WIDGET_OUTPUT_MULTI_LINE,tor_log_mode ? &tor_log_buffer : &torx_log_buffer,tor_log_mode ? &tor_log_buffer_pos : &torx_log_buffer_pos);
+	widget_text(win,&fy,&fx,subtract_size(screen_rows,2),inner_width,NULL,WIDGET_OUTPUT_MULTI_LINE,tor_log_mode ? &tor_log_buffer : &torx_log_buffer,tor_log_mode ? &tor_log_buffer_pos : &torx_log_buffer_pos);
 if(tor_log_mode) error_simple(0,"Checkpoint scroll 2");
 	sodium_memzero(label,sizeof(label));
 	widget_draw_cursor(win); // XXX Must do last
@@ -2836,7 +2841,7 @@ static void draw_torrc(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_edit_torrc,strlen(text_edit_torrc));
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),text_edit_torrc,strlen(text_edit_torrc));
 	wattroff(win,A_BOLD); // bold off
 
 	char label[256];
@@ -2847,7 +2852,7 @@ static void draw_torrc(void)
 
 	fx = align_center(inner_width);
 	widget_next_has_default_focus(); // XXX Set default widget focus
-	widget_text(win,&fy,&fx,screen_rows - 2,inner_width,NULL,WIDGET_INPUT_MULTI_LINE,&torrc_content_local,&torrc_pos);
+	widget_text(win,&fy,&fx,subtract_size(screen_rows,2),inner_width,NULL,WIDGET_INPUT_MULTI_LINE,&torrc_content_local,&torrc_pos);
 
 	sodium_memzero(label,sizeof(label));
 	widget_draw_cursor(win); // XXX Must do last
@@ -2861,7 +2866,7 @@ static void draw_change_password(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_change_password,strlen(text_change_password));
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),text_change_password,strlen(text_change_password));
 	wattroff(win,A_BOLD); // bold off
 
 	fy = 0; // back to top
@@ -2890,7 +2895,7 @@ static void draw_generate(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	print_nowrap(win,&fy,&fx,screen_cols-(2*2),generate_group_mode ? text_group : text_add_generate,strlen(generate_group_mode ? text_group : text_add_generate));
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),generate_group_mode ? text_group : text_add_generate,strlen(generate_group_mode ? text_group : text_add_generate));
 	wattroff(win,A_BOLD); // bold off
 
 	char label[256];
@@ -2922,12 +2927,12 @@ static void draw_global_kill(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_global_kill,strlen(text_global_kill));
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),text_global_kill,strlen(text_global_kill));
 	wattroff(win,A_BOLD); // bold off
 
 	size_t label_len = strlen(text_global_kill_warning);
 	fy += 2, fx = 2;
-	print_wrap(win,&fy,&fx,screen_cols-(2*2),text_global_kill_warning,label_len);
+	print_wrap(win,&fy,&fx,subtract_size(screen_cols,2*2),text_global_kill_warning,label_len);
 
 	char label[256];
 	snprintf(label,sizeof(label),"[ %s ]",text_emit_global_kill);
@@ -2961,13 +2966,13 @@ static void draw_chat_actions(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_actions,strlen(text_actions));
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),text_actions,strlen(text_actions));
 	wattroff(win,A_BOLD); // bold off
 
 	fy += 2, fx = 2;
-	print_wrap(win, &fy, &fx, screen_cols-(2*2), text_identifier, strlen(text_identifier));
+	print_wrap(win, &fy, &fx, subtract_size(screen_cols,2*2), text_identifier, strlen(text_identifier));
 	fy += 1,fx = align_right(torx_utf8len(tmp_rename));
-	widget_text(win,&fy,&fx,1,screen_cols-(2*2),callback_rename,WIDGET_INPUT_SINGLE_LINE,&tmp_rename,&tmp_rename_pos);
+	widget_text(win,&fy,&fx,1,subtract_size(screen_cols,2*2),callback_rename,WIDGET_INPUT_SINGLE_LINE,&tmp_rename,&tmp_rename_pos);
 
 	const uint8_t owner = getter_uint8(global_n,INT_MIN,-1,offsetof(struct peer_list,owner));
 	if(owner == ENUM_OWNER_GROUP_CTRL)
@@ -2975,11 +2980,11 @@ static void draw_chat_actions(void)
 		const int g = set_g(global_n,NULL);
 		const uint8_t g_invite_required = getter_group_uint8(g,offsetof(struct group_list,invite_required));
 		fy += 2, fx = align_right(torx_utf8len(text_current_members));
-		widget_button(win,&fy,&fx,screen_cols-(2*2),callback_group_peerlist,text_current_members);
+		widget_button(win,&fy,&fx,subtract_size(screen_cols,2*2),callback_group_peerlist,text_current_members);
 		if(g_invite_required)
 		{
 			fy += 2, fx = align_right(torx_utf8len(text_invite_friend));
-			widget_button(win,&fy,&fx,screen_cols-(2*2),callback_group_invite,text_invite_friend);
+			widget_button(win,&fy,&fx,subtract_size(screen_cols,2*2),callback_group_invite,text_invite_friend);
 		}
 		else
 		{ // Shows GroupID
@@ -2989,9 +2994,9 @@ static void draw_chat_actions(void)
 			pthread_rwlock_unlock(&mutex_expand_group); // 🟩
 			char *group_id_encoded = b64_encode(id,GROUP_ID_SIZE);
 			fy += 2, fx = 2;
-			print_wrap(win, &fy, &fx, screen_cols-(2*2), text_groupid, strlen(text_groupid));
+			print_wrap(win, &fy, &fx, subtract_size(screen_cols,2*2), text_groupid, strlen(text_groupid));
 			fy += 2, fx = align_right(torx_utf8len(group_id_encoded));
-			print_wrap(win, &fy, &fx, screen_cols-(2*2), group_id_encoded, torx_allocation_len(group_id_encoded)-1);
+			print_wrap(win, &fy, &fx, subtract_size(screen_cols,2*2), group_id_encoded, torx_allocation_len(group_id_encoded)-1);
 			sodium_memzero(id,sizeof(id));
 			torx_free((void*)&group_id_encoded);
 		}
@@ -3010,7 +3015,7 @@ static void draw_chat_settings(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_settings,strlen(text_settings));
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),text_settings,strlen(text_settings));
 	wattroff(win,A_BOLD); // bold off
 
 	fy = 0; // back to top
@@ -3027,13 +3032,13 @@ static void draw_group_invite(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_invite_friend,strlen(text_invite_friend));
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),text_invite_friend,strlen(text_invite_friend));
 	wattroff(win,A_BOLD); // bold off
 
 	if(search)
 	{
 		fy = 0,fx = align_right(torx_utf8len(search));
-		print_nowrap(win,&fy,&fx,screen_cols-(fx+2),search,strlen(search));
+		print_nowrap(win,&fy,&fx,subtract_size(screen_cols,fx+2),search,strlen(search));
 	}
 
 	fy = 0; // back to top
@@ -3050,13 +3055,13 @@ static void draw_group_peerlist(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_group_peers,strlen(text_group_peers));
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),text_group_peers,strlen(text_group_peers));
 	wattroff(win,A_BOLD); // bold off
 
 	if(search)
 	{
 		fx = align_right(torx_utf8len(search));
-		print_nowrap(win,&fy,&fx,screen_cols-(fx+2),search,strlen(search));
+		print_nowrap(win,&fy,&fx,subtract_size(screen_cols,fx+2),search,strlen(search));
 	}
 
 	fy = 0; // back to top
@@ -3133,7 +3138,7 @@ static void draw_requests(void)
 
 	size_t fy = 0,fx = 2;
 	wattron(win,A_BOLD); // bold on
-	print_nowrap(win,&fy,&fx,screen_cols-(2*2),outgoing_mode ? text_outgoing : text_incoming,strlen(outgoing_mode ? text_outgoing : text_incoming));
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),outgoing_mode ? text_outgoing : text_incoming,strlen(outgoing_mode ? text_outgoing : text_incoming));
 	wattroff(win,A_BOLD); // bold off
 
 	char label[256];
@@ -3145,12 +3150,12 @@ static void draw_requests(void)
 	if(search)
 	{
 		fy = 0,fx = align_right(torx_utf8len(search) + 1 + utf8len);
-		print_nowrap(win,&fy,&fx,screen_cols-(fx+2),search,strlen(search));
+		print_nowrap(win,&fy,&fx,subtract_size(screen_cols,fx+2),search,strlen(search));
 	}
 
 	const size_t label_len = (size_t)snprintf(label,sizeof(label),"%s %s",text_identifier, threadsafe_read_uint8(&mutex_global_variable,&shorten_torxids) ? text_torxid : text_onionid);
 	fx = 2;
-	print_wrap(win,&fy,&fx,screen_cols-(2*2),label,label_len);
+	print_wrap(win,&fy,&fx,subtract_size(screen_cols,2*2),label,label_len);
 
 	draw_scrollable(win,&fy,&fx,&focus_requests,&requests_scroll_offset);
 
@@ -3172,7 +3177,7 @@ static void draw_ids(void)
 
 	size_t fy = 0,fx = 2;
 	wattron(win,A_BOLD); // bold on
-	print_nowrap(win,&fy,&fx,screen_cols-(2*2),single_mode ? text_active_sing : text_active_mult,strlen(single_mode ? text_active_sing : text_active_mult));
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),single_mode ? text_active_sing : text_active_mult,strlen(single_mode ? text_active_sing : text_active_mult));
 	wattroff(win,A_BOLD); // bold off
 
 	char label[256];
@@ -3184,12 +3189,12 @@ static void draw_ids(void)
 	if(search)
 	{
 		fy = 0,fx = align_right(torx_utf8len(search) + 1 + utf8len);
-		print_nowrap(win,&fy,&fx,screen_cols-(fx+2),search,strlen(search));
+		print_nowrap(win,&fy,&fx,subtract_size(screen_cols,fx+2),search,strlen(search));
 	}
 
 	const size_t label_len = (size_t)snprintf(label,sizeof(label),"%s %s %s",text_active,text_identifier, threadsafe_read_uint8(&mutex_global_variable,&shorten_torxids) ? text_torxid : text_onionid);
 	fx = 2;
-	print_wrap(win,&fy,&fx,screen_cols-(2*2),label,label_len);
+	print_wrap(win,&fy,&fx,subtract_size(screen_cols,2*2),label,label_len);
 
 	draw_scrollable(win,&fy,&fx,&focus_ids,&ids_scroll_offset);
 
@@ -3258,11 +3263,11 @@ static void draw_contacts(void)
 	size_t fy = 0,fx = 2;
 	wattron(win,A_BOLD); // bold on
 	if(groups_mode == ENUM_SHOW_PEER)
-		print_nowrap(win,&fy,&fx,screen_cols-(fx*2),text_peer,strlen(text_peer));
+		print_nowrap(win,&fy,&fx,subtract_size(screen_cols,fx*2),text_peer,strlen(text_peer));
 	else if(groups_mode == ENUM_SHOW_GROUP)
-		print_nowrap(win,&fy,&fx,screen_cols-(fx*2),text_group,strlen(text_group));
+		print_nowrap(win,&fy,&fx,subtract_size(screen_cols,fx*2),text_group,strlen(text_group));
 	else if(groups_mode == ENUM_SHOW_BLOCK)
-		print_nowrap(win,&fy,&fx,screen_cols-(fx*2),text_block,strlen(text_block));
+		print_nowrap(win,&fy,&fx,subtract_size(screen_cols,fx*2),text_block,strlen(text_block));
 	wattroff(win,A_BOLD); // bold off
 
 	char label[256];
@@ -3283,7 +3288,7 @@ static void draw_contacts(void)
 	if(search)
 	{
 		fy = 0,fx = align_right(torx_utf8len(search) + 1 + utf8len);
-		print_nowrap(win,&fy,&fx,screen_cols-(fx+2),search,strlen(search));
+		print_nowrap(win,&fy,&fx,subtract_size(screen_cols,fx+2),search,strlen(search));
 	}
 
 	fy = 1;
@@ -3320,7 +3325,7 @@ static void draw_contacts(void)
 	widget_button(win,&fy,&fx,utf8len,callback_global_kill,label);
 
 //	fy = screen_rows-2, fx = 2; // Drawing bottom first because it is less important
-//	print_wrap(win, &fy, &fx, screen_cols-(fx*2), text_navigation_basic, strlen(text_navigation_basic));
+//	print_wrap(win, &fy, &fx, subtract_size(screen_cols,fx*2), text_navigation_basic, strlen(text_navigation_basic));
 
 	fy = 0; // back to top
 	draw_scrollable(win,&fy,&fx,&focus_contacts,&contacts_scroll_offset);
@@ -3401,7 +3406,7 @@ static void draw_message_actions(void)
 	size_t fy = 0,fx = 2;
 	// Draw top line widgets
 	wattron(win,A_BOLD); // bold on
-	print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_actions,strlen(text_actions));
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),text_actions,strlen(text_actions));
 	wattroff(win,A_BOLD); // bold off
 
 	char label[256];
@@ -3437,9 +3442,9 @@ static void draw_message_actions(void)
 	if(owner == ENUM_OWNER_GROUP_PEER)
 	{ // allow renaming the peer
 		fy += 1, fx = 2;
-		print_wrap(win, &fy, &fx, screen_cols-(2*2), text_identifier, strlen(text_identifier));
+		print_wrap(win, &fy, &fx, subtract_size(screen_cols,2*2), text_identifier, strlen(text_identifier));
 		fy += 1,fx = align_right(torx_utf8len(tmp_rename));
-		widget_text(win,&fy,&fx,1,screen_cols-(2*2),callback_rename,WIDGET_INPUT_SINGLE_LINE,&tmp_rename,&tmp_rename_pos);
+		widget_text(win,&fy,&fx,1,subtract_size(screen_cols,2*2),callback_rename,WIDGET_INPUT_SINGLE_LINE,&tmp_rename,&tmp_rename_pos);
 	}
 
 	sodium_memzero(label,sizeof(label));
@@ -3570,7 +3575,7 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 		size_t anticipated_lines = 1 + print_wrap(NULL,NULL,NULL,inner_width,message,printable_len);
 		if(win && ((anticipated_lines + processed_lines > must_be_processed_lines - height_of_scrollable) || must_be_processed_lines < height_of_scrollable))
 		{ // we are ACTUALLY printing
-			const size_t required_offset = chat_scroll_lines > processed_lines ? chat_scroll_lines - processed_lines : 0;
+			const size_t required_offset = subtract_size(chat_scroll_lines,processed_lines);
 			size_t truncation = 0; // number of characters truncated from the end
 			if(required_offset)
 			{ // Some of the message was already processed. Truncation required XXX Must do BEFORE calculating offset.
@@ -3704,12 +3709,12 @@ static void draw_chat(void)
 	const size_t visual_lines = 1 + print_wrap(NULL,NULL, NULL, inner_width, t_peer[n].unsent, torx_allocation_len(t_peer[n].unsent) - 1); // alt: t_peer[n].unsent_pos
 
 	// Draw horizontal divider
-	const size_t mid = visual_lines + 2 + TOP_LINE_HEIGHT >= screen_rows ? TOP_LINE_HEIGHT : screen_rows - visual_lines - 2;
+	const size_t mid = visual_lines + 2 + TOP_LINE_HEIGHT >= screen_rows ? TOP_LINE_HEIGHT : subtract_size(screen_rows,visual_lines + 2);
 	for(size_t x = 1; x + 1 < screen_cols; x++)
 		mvwaddch(win, (int)mid, (int)x, ACS_HLINE);
 	// Draw intersection characters
 	mvwaddch(win, (int)mid, 0, ACS_LTEE);
-	mvwaddch(win, (int)mid, (int)screen_cols-1, ACS_RTEE);
+	mvwaddch(win, (int)mid, (int)subtract_size(screen_cols,1), ACS_RTEE);
 
 	size_t fy = mid,fx = 2;
 	if(t_peer[n].pm_n > -1)
@@ -3718,19 +3723,19 @@ static void draw_chat(void)
 		char cancel_message[256]; // zero'd
 		snprintf(cancel_message,sizeof(cancel_message),"%s %s",text_private_messaging,peernick);
 		torx_free((void*)&peernick);
-		print_nowrap(win,&fy,&fx,screen_cols-(2*2),cancel_message,strlen(cancel_message));
+		print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),cancel_message,strlen(cancel_message));
 		sodium_memzero(cancel_message,sizeof(cancel_message));
 	}
 	else if(t_peer[n].edit_n > -1)
-		print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_cancel_editing,strlen(text_cancel_editing));
+		print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),text_cancel_editing,strlen(text_cancel_editing));
 	else
-		print_nowrap(win,&fy,&fx,screen_cols-(2*2),text_navigation_chat,strlen(text_navigation_chat));
+		print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),text_navigation_chat,strlen(text_navigation_chat));
 
 	// Draw top line widgets
 	char *peernick = getter_string(n,INT_MIN,-1,offsetof(struct peer_list,peernick));
 	wattron(win,A_BOLD); // bold on
 	fy = 0,fx = 2;
-	print_nowrap(win,&fy,&fx,screen_cols-(2*2),peernick,strlen(peernick));
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),peernick,strlen(peernick));
 	wattroff(win,A_BOLD); // bold off
 	torx_free((void*)&peernick);
 
@@ -3777,8 +3782,8 @@ static void draw_chat(void)
 			zero_w(w);
 		widget = torx_realloc(widget,sizeof(struct widget) * widgets_existing_before_scrollable);
 		// Then clear the print area
-		chat_scroll_lines = chat_scroll_max > chat_scroll_jump ? chat_scroll_max - chat_scroll_jump : 0;
-		const size_t edge = (screen_cols - inner_width)/2;
+		chat_scroll_lines = subtract_size(chat_scroll_max,chat_scroll_jump);
+		const size_t edge = subtract_size(screen_cols,inner_width)/2;
 		for(size_t y = 0; y < chat_scroll_jump; y++)
 			for(size_t x = 0; x < inner_width; x++)
 				mvwaddch(win, (int)y + TOP_LINE_HEIGHT, (int)(x + edge), (chtype)' ');
@@ -3828,7 +3833,7 @@ static void draw_chat(void)
 	else
 		message_entry_currently_selected = false;
 	widget_next_has_default_focus(); // XXX Set default widget focus
-	widget_text(win,&fy,&fx,screen_rows - mid - 2,inner_width,callback_message_input,WIDGET_INPUT_MULTI_LINE,&t_peer[n].unsent,&t_peer[n].unsent_pos);
+	widget_text(win,&fy,&fx,subtract_size(screen_rows,mid + 2),inner_width,callback_message_input,WIDGET_INPUT_MULTI_LINE,&t_peer[n].unsent,&t_peer[n].unsent_pos);
 
 	sodium_memzero(label,sizeof(label));
 	widget_draw_cursor(win); // XXX Must do last
