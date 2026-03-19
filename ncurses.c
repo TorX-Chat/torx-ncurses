@@ -194,6 +194,7 @@ static int notify_fds[2] = { -1, -1 }; // triggered by library callbacks, indica
 static size_t login_scroll_offset = 0;
 
 /* Chat state */
+static bool message_entry_currently_selected = false;
 static size_t prior_print_start = 0; // TODO this should really be per peer, but this isn't just for message entry. Can't have it per widget because widgets get destroyed
 static size_t chat_scroll_lines = 0; // Number of lines currently scrolled. Similar concept with _scroll_offset
 static size_t chat_scroll_max;
@@ -1078,23 +1079,38 @@ static int keypress(const int w, const wint_t ch)
 			*widget[w].cursor = torx_allocation_len(*widget[w].text) - 1;
 		return 1;
 	}
-	else if(w > - 1 && window_chat && ch == KEY_PPAGE && !chat_scroll_max)
+	else if(w > - 1 && window_chat && ch == KEY_PPAGE)
 	{ // PgUp
-		chat_scroll_lines += chat_scroll_jump;
-		return 1;
+		if(!chat_scroll_max)
+		{ // Note: must not combine with parent `else if`
+			if(message_entry_currently_selected)
+				*current_focus = -1; // reset to default, which is message input (yes this is necessary)
+			chat_scroll_lines += chat_scroll_jump;
+			return 1;
+		}
 	}
-	else if(w > - 1 && window_chat && ch == KEY_NPAGE && chat_scroll_lines > 0)
+	else if(w > - 1 && window_chat && ch == KEY_NPAGE)
 	{ // PgDn
-		if(chat_scroll_lines > chat_scroll_jump)
-			chat_scroll_lines -= chat_scroll_jump;
-		else
-			chat_scroll_lines = 0;
-		return 1;
+		if(chat_scroll_lines > 0)
+		{ // Note: must not combine with parent `else if`
+			if(message_entry_currently_selected)
+				*current_focus = -1; // reset to default, which is message input (yes this is necessary)
+			if(chat_scroll_lines > chat_scroll_jump)
+				chat_scroll_lines -= chat_scroll_jump;
+			else
+				chat_scroll_lines = 0;
+			return 1;
+		}
 	}
 	else if(w > - 1 && window_chat && ch == KEY_END)
 	{
-		chat_scroll_lines = 0;
-		return 1;
+		if(chat_scroll_lines)
+		{
+			if(message_entry_currently_selected)
+				*current_focus = -1; // reset to default, which is message input (yes this is necessary)
+			chat_scroll_lines = 0;
+			return 1;
+		}
 	}
 	else if(w > - 1 && ch == KEY_END)
 	{ // Targets single lines entries. Must go AFTER prior usage in window_chat and MULTI_LINE.
@@ -1192,6 +1208,8 @@ static int keypress(const int w, const wint_t ch)
 	}
 	else if(w > - 1 && ch == KEY_DELETE && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE)
 	{
+		if(message_entry_currently_selected)
+			*current_focus = -1; // reset to default, which is message input (yes this is necessary)
 		const size_t prior_allocation_len = torx_allocation_len(*widget[w].text);
 		if(*widget[w].cursor + 1 < prior_allocation_len)
 		{ // DO NOT MODIFY
@@ -1204,6 +1222,8 @@ static int keypress(const int w, const wint_t ch)
 	}
 	else if(w > - 1 && (ch == KEY_BACKSPACE || ch == 127 || ch == 8) && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE)
 	{
+		if(message_entry_currently_selected)
+			*current_focus = -1; // reset to default, which is message input (yes this is necessary)
 		if(*widget[w].cursor)
 		{
 			const size_t removal = cursor_back(*widget[w].text,*widget[w].cursor);
@@ -1223,6 +1243,8 @@ static int keypress(const int w, const wint_t ch)
 			beep(); // do nothing, ignore invalid entry
 		else
 		{
+			if(message_entry_currently_selected)
+				*current_focus = -1; // reset to default, which is message input (yes this is necessary)
 			append_character_at_cursor(w,ch);
 			return 1; // Rebuild
 		}
@@ -3616,6 +3638,8 @@ static int callback_message_input(const int w)
 	(void)w;
 	const int n = global_n;
 	const size_t unsent_len = torx_allocation_len(t_peer[n].unsent) ? torx_allocation_len(t_peer[n].unsent) - 1 : 0;
+	if(message_entry_currently_selected) // XXX DO THIS CHECK BEFORE message_send, in case of race condition
+		*current_focus = -1; // reset to default, which is message input (yes this is necessary)
 	if(!unsent_len)
 		return 1; // Ignore it, but trigger rebuild to prevent it from being appended.
 	else if(t_peer[n].unsent_pos == unsent_len)
@@ -3799,6 +3823,10 @@ static void draw_chat(void)
 	}
 	// Print unsent
 	fy = mid + 1,fx = align_center(inner_width);
+	if(*current_focus < 0 || *current_focus == (int)(torx_allocation_len(widget) / sizeof(struct widget))) // must be before widget_next_has_default_focus
+		message_entry_currently_selected = true;
+	else
+		message_entry_currently_selected = false;
 	widget_next_has_default_focus(); // XXX Set default widget focus
 	widget_text(win,&fy,&fx,screen_rows - mid - 2,inner_width,callback_message_input,WIDGET_INPUT_MULTI_LINE,&t_peer[n].unsent,&t_peer[n].unsent_pos);
 
