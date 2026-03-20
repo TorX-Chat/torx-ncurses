@@ -708,6 +708,11 @@ static void widget_draw_cursor(WINDOW *win)
 		error_simple(0,"Current focus was >= active widgets in widget_draw_cursor");
 		*current_focus = active_widgets - 1;
 	}
+	if(cursor[0] >= screen_rows || cursor[1] >= screen_cols)
+	{
+		error_simple(0,"Cursor will be displayed in the wrong location, likely due to resizing");
+		widget_set_cursor(0,0);
+	}
 	wmove(win, (int)cursor[0], (int)cursor[1]);
 	wrefresh(win);
 }
@@ -3595,6 +3600,8 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 					while(iter < inner_width && message[tmp_iter + iter] != '\n')
 						iter++;
 					tmp_iter += iter;
+					if(tmp_iter < printable_len && message[tmp_iter] == '\n')
+						tmp_iter++; // skip past the newline character
 				}
 				truncation = printable_len - tmp_iter;
 			}
@@ -3608,6 +3615,8 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 					while(iter < inner_width && message[offset + iter] != '\n')
 						iter++;
 					offset += iter;
+					if(offset < printable_len && message[offset] == '\n')
+						offset++; // skip past the newline character
 				}
 				anticipated_lines = available_lines; // XXX reducing anticipated lines from the start
 			}
@@ -4313,8 +4322,10 @@ int main(int argc, char **argv)
 		if(resized)
 		{
 			resized = 0;
-		//***	if(*current_focus > -1 && widget[*current_focus].text && widget[*current_focus].type != WIDGET_OUTPUT_MULTI_LINE) // TODO why do we have to do this even on single line text?
-		//***		*current_focus = -1; // reset to default, which is message input (yes this is necessary)
+			if(window_chat && message_entry_currently_selected)
+				*current_focus = -1; // Prevent jumping from message entry when widget counts change
+			else if(*current_focus > -1 && widget[*current_focus].text && widget[*current_focus].type != WIDGET_OUTPUT_MULTI_LINE)
+				*current_focus = -1; // TODO this is undesirable but working around a hang on wrefresh(win)
 			endwin(); refresh(); clear(); keypad(stdscr,TRUE); // all necessary when resizing
 			redraw();
 		}
