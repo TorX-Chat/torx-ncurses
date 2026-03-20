@@ -2721,6 +2721,14 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 			for(size_t x = 1; x + 1 < screen_cols; x++)
 				mvwaddch(win, (int)subtract_size(screen_rows,1), (int)x, ACS_HLINE);
 	}
+/*	else if(!more_to_print && *scroll_offset > 0 *fyp + 2 < subtract_size(screen_rows, 2))
+	{ // Reverse of above: window grew; reveal a previously hidden widget at top. TODO this only works on single line widgets otherwise it segfaults, but the thought is nice. To make it work on multiline widgets would probably require efforts elsewhere and a lot of redrawing?
+		if(*focus >= (int)widgets_existing_before_scrollable)
+			*focus = *focus + 1;
+		*scroll_offset = *scroll_offset - 1;
+		redraw();
+		return;
+	}*/
 }
 
 static int callback_torrc(const int w)
