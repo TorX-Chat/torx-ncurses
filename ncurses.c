@@ -698,10 +698,16 @@ static void widget_clear(int *new_focus)
 static void widget_draw_cursor(WINDOW *win)
 { // Must call last when drawing a new route, after drawing the last widget, or when re-drawing a text widget alone.
 	const int active_widgets = (int)(torx_allocation_len(widget) / sizeof(struct widget));
-	if(active_widgets == 0 && *current_focus > -1)
-		*current_focus = -1; // Unsetting widget_next_has_default_focus if we have no widgets
-	else if(*current_focus < 0)
-		*current_focus = 0; // There are widgets but widget_next_has_default_focus wasn't called, so default to 0
+	if(*current_focus < 0)
+	{ // There are widgets but widget_next_has_default_focus wasn't called, so default to 0 (NOTE: highlight won't work. Should always call widget_next_has_default_focus)
+		error_simple(0,"Should always call widget_next_has_default_focus when drawing a window, if widgets exist");
+		*current_focus = 0;
+	}
+	else if(*current_focus >= active_widgets)
+	{
+		error_simple(0,"Current focus was >= active widgets in widget_draw_cursor");
+		*current_focus = active_widgets - 1;
+	}
 	wmove(win, (int)cursor[0], (int)cursor[1]);
 	wrefresh(win);
 }
@@ -1038,11 +1044,10 @@ static void go_back(size_t motions)
 static int keypress(const int w, const wint_t ch)
 {
 	if(w >= (int)(torx_allocation_len(widget) / sizeof(struct widget)))
-	{ // XXX Due to zero indexing, it will likely show "10 of 10" which is indeed an error.
-		*current_focus = -1;
-		error_printf(0,"Keypress called on invalid widget: %d of %lu. Resized=%d",w,torx_allocation_len(widget) / sizeof(struct widget),resized);
-	//	go_back(1);
-		return 1; // Sanity check
+	{ // Due to zero indexing, it will likely show "10 of 10" or higher which is indeed an error.
+		error_printf(0,"Keypress called on invalid widget: %d of %lu.",w,torx_allocation_len(widget) / sizeof(struct widget));
+		go_back(1);
+		return 0;
 	}
 	uint8_t goneto = 0;
 	const size_t max_height = subtract_size(screen_rows,3); // TODO this should be specific to each page
@@ -2754,7 +2759,6 @@ static void draw_settings(void)
 	widget_button(win,&fy,&fx,utf8len2,callback_torrc,label);
 
 	widget_next_has_default_focus(); // XXX Set default widget focus
-
 	fy = 0; // back to top
 	draw_scrollable(win,&fy,&fx,&focus_settings,&settings_scroll_offset);
 
@@ -4309,6 +4313,8 @@ int main(int argc, char **argv)
 		if(resized)
 		{
 			resized = 0;
+		//***	if(*current_focus > -1 && widget[*current_focus].text) // TODO why do we have to do this even on single line text?
+		//***		*current_focus = -1; // reset to default, which is message input (yes this is necessary)
 			endwin(); refresh(); clear(); keypad(stdscr,TRUE); // all necessary when resizing
 			redraw();
 		}
