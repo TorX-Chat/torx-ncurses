@@ -4313,7 +4313,7 @@ int main(int argc, char **argv)
 		if(resized)
 		{
 			resized = 0;
-		//***	if(*current_focus > -1 && widget[*current_focus].text) // TODO why do we have to do this even on single line text?
+		//***	if(*current_focus > -1 && widget[*current_focus].text && widget[*current_focus].type != WIDGET_OUTPUT_MULTI_LINE) // TODO why do we have to do this even on single line text?
 		//***		*current_focus = -1; // reset to default, which is message input (yes this is necessary)
 			endwin(); refresh(); clear(); keypad(stdscr,TRUE); // all necessary when resizing
 			redraw();
