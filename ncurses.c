@@ -560,6 +560,8 @@ static inline size_t print_internal(WINDOW *win,size_t *y,size_t *x,const size_t
 	{
 		const uint8_t printing = (win && y && x) ? 1 : 0;
 		size_t offset_y = 0,offset_x = 0;
+		wchar_t line_buf[max_width + 1];
+		int buf_pos = 0; // not to be confused with offset_x
 		for(size_t iter = 0; iter < len && str[iter] != '\0'; )
 		{
 			wchar_t wc;
@@ -574,6 +576,11 @@ static inline size_t print_internal(WINDOW *win,size_t *y,size_t *x,const size_t
 			{
 				if(!wrap)
 					break; // Can't print more without wrapping
+				if(printing && buf_pos > 0)
+				{
+					mvwaddnwstr(win,(int)(*y + offset_y),(int)(*x),line_buf,buf_pos);
+					buf_pos = 0;
+				}
 				offset_y++;
 				offset_x = 0;
 				if(str[iter] == '\n')
@@ -583,14 +590,12 @@ static inline size_t print_internal(WINDOW *win,size_t *y,size_t *x,const size_t
 				}
 			}
 			if(printing) // not else if
-			{
-				cchar_t ch;
-				setcchar(&ch, &wc, A_NORMAL, 0, NULL);
-				mvwadd_wch(win, (int)(*y + offset_y), (int)(*x + offset_x), &ch); // TODO perhaps use mvwadd_wstr or mvwaddnwstr for better efficiency?
-			}
+				line_buf[buf_pos++] = wc;
 			offset_x += (size_t)print_width; // Note: +=print_width is because not all wide characters take only one column
 			iter += num_bytes;
 		}
+		if(printing && buf_pos > 0)
+			mvwaddnwstr(win,(int)(*y + offset_y),(int)(*x),line_buf,buf_pos);
 		if(offset_x == max_width)
 		{ // Important for cursor position
 			offset_y++;
