@@ -763,7 +763,7 @@ static int widget_text(WINDOW *win,size_t *y,size_t *x,const size_t max_height,c
 		return 0;
 	const size_t start_y = *y, start_x = *x;
 	size_t text_len = (text_p && *text_p) ? strlen(*text_p) : 0;
-	if(WIDGET_OUTPUT_MULTI_LINE && text_len && (*text_p)[text_len-1] == '\n')
+	if(type == WIDGET_OUTPUT_MULTI_LINE && text_len && (*text_p)[text_len-1] == '\n')
 		text_len--; // strip trailing newline on outputs
 	if(cursor_pos && *cursor_pos > text_len)
 		*cursor_pos = text_len; // Necesary to mitigate bugs
