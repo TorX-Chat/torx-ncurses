@@ -914,7 +914,7 @@ static inline void append_character_at_cursor(const int w, const wint_t ch)
 		memmove(&(*widget[w].text)[*widget[w].cursor+length_of_specific_char], &(*widget[w].text)[*widget[w].cursor], prior_allocation_len - *widget[w].cursor); // move data forward from cursor, leaving a gap
 	}
 	memcpy(&(*widget[w].text)[*widget[w].cursor],buff,length_of_specific_char);
-	*widget[w].cursor = *widget[w].cursor + length_of_specific_char;
+	*widget[w].cursor += length_of_specific_char;
 	sodium_memzero(buff,sizeof(buff));
 }
 
@@ -1068,7 +1068,7 @@ static int keypress(const int w, const wint_t ch)
 		if(window_chat && *current_focus == (int)widgets_existing_before_scrollable)
 			*current_focus = (int)(torx_allocation_len(widget) / sizeof(struct widget)) - 1; // skip to last widget (latest message -> unsent)
 		else if(current_scroll_offset && *current_focus + 1 == (int)(torx_allocation_len(widget) / sizeof(struct widget)) && more_to_print)
-			*current_scroll_offset = *current_scroll_offset + 1; // At end, need to move down, without current_focus
+			*current_scroll_offset += 1; // NOT the same as ++ // At end, need to move down, without current_focus
 		else
 		{ // DO NOT MODIFY
 			if(current_scroll_offset && widgets_existing_before_scrollable && *current_focus + 1 == (int)widgets_existing_before_scrollable)
@@ -1162,9 +1162,9 @@ static int keypress(const int w, const wint_t ch)
 			goto down;
 		}
 		else if(*current_focus > 0 && (*current_focus != (int)widgets_existing_before_scrollable || !current_scroll_offset || !*current_scroll_offset))
-			*current_focus = *current_focus - 1;
+			*current_focus -= 1; // NOT the same as --
 		else if(current_scroll_offset && *current_scroll_offset)
-			*current_scroll_offset = *current_scroll_offset - 1;
+			*current_scroll_offset -= 1; // NOT the same as --
 		return 1; // Rebuild
 	}
 	else if(w > - 1 && ch == KEY_DOWN)
@@ -1183,16 +1183,16 @@ static int keypress(const int w, const wint_t ch)
 			goto up;
 		}
 		else if(*current_focus + 1 < (int)(torx_allocation_len(widget) / sizeof(struct widget)))
-			*current_focus = *current_focus + 1;
+			*current_focus += 1; // NOT the same as ++
 		else if(more_to_print && current_scroll_offset)
-			*current_scroll_offset = *current_scroll_offset + 1;
+			*current_scroll_offset += 1; // NOT the same as ++
 		return 1; // Rebuild
 	}
 	else if(w > - 1 && ch == KEY_LEFT)
 	{ // DO NOT MODIFY
 		if(widget[w].cursor && *widget[w].cursor > 0)
 		{
-			*widget[w].cursor = *widget[w].cursor - cursor_back(*widget[w].text,*widget[w].cursor);
+			*widget[w].cursor -= cursor_back(*widget[w].text,*widget[w].cursor);
 			return 1; // Rebuild
 		}
 		else if(window_contacts && *current_focus < (int)widgets_existing_before_scrollable)
@@ -1202,7 +1202,7 @@ static int keypress(const int w, const wint_t ch)
 		}
 		else if(*current_focus < (int)widgets_existing_before_scrollable)
 		{
-			*current_focus = *current_focus + 1;
+			*current_focus += 1; // NOT the same as ++
 			return 1;
 		}
 		beep();
@@ -1213,13 +1213,13 @@ static int keypress(const int w, const wint_t ch)
 		{
 			if(*widget[w].cursor + 1 < torx_allocation_len(*widget[w].text))
 			{
-				*widget[w].cursor = *widget[w].cursor + cursor_forward(*widget[w].text,*widget[w].cursor);;
+				*widget[w].cursor += cursor_forward(*widget[w].text,*widget[w].cursor);
 				return 1; // Rebuild
 			}
 		}
 		else if(*current_focus && *current_focus < (int)widgets_existing_before_scrollable)
 		{
-			*current_focus = *current_focus - 1;
+			*current_focus -= 1;
 			return 1;
 		}
 		else if(*current_focus >= (int)widgets_existing_before_scrollable && widgets_existing_before_scrollable)
@@ -1253,7 +1253,7 @@ static int keypress(const int w, const wint_t ch)
 			const size_t prior_allocation_len = torx_allocation_len(*widget[w].text);
 			memmove(&(*widget[w].text)[*widget[w].cursor-removal], &(*widget[w].text)[*widget[w].cursor], prior_allocation_len - *widget[w].cursor);
 			*widget[w].text = torx_realloc(*widget[w].text,prior_allocation_len-removal); // after memmove
-			*widget[w].cursor = *widget[w].cursor - removal;
+			*widget[w].cursor -= removal;
 			return 1; // Rebuild
 		}
 		beep();
@@ -2717,8 +2717,8 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 	{ // DO NOT MODIFY
 		if(torx_allocation_len(widget) / sizeof(struct widget) - widgets_existing_before_scrollable > 1 && *focus + 1 == (int)(torx_allocation_len(widget) / sizeof(struct widget)))
 		{ // VERY IMPORTANT. Do not modify! When (scrollable widgets > 1 && current focus is on a partially printed widget)
-			*focus = *focus - 1;
-			*scroll_offset = *scroll_offset + 1;
+			*focus -= 1; // NOT the same as --
+			*scroll_offset += 1; // NOT the same as ++
 			redraw();
 			return; // safety
 		}
@@ -2729,8 +2729,8 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 /*	else if(!more_to_print && *scroll_offset > 0 *fyp + 2 < subtract_size(screen_rows, 2))
 	{ // Reverse of above: window grew; reveal a previously hidden widget at top. TODO this only works on single line widgets otherwise it segfaults, but the thought is nice. To make it work on multiline widgets would probably require efforts elsewhere and a lot of redrawing?
 		if(*focus >= (int)widgets_existing_before_scrollable)
-			*focus = *focus + 1;
-		*scroll_offset = *scroll_offset - 1;
+			*focus += 1;
+		*scroll_offset -= 1;
 		redraw();
 		return;
 	}*/
@@ -3487,6 +3487,27 @@ static int callback_message(const int w)
 //	return 1; // Rebuild
 }
 
+static inline void calculate_truncation(size_t *offset,const size_t printable_len,const char *message)
+{ // Only for use in print_message TODO rename function
+	for(size_t visual_col = 0; *offset < printable_len && message[*offset] != '\n'; )
+	{
+		wchar_t wc;
+		const size_t num_bytes = mbrtowc(&wc, &message[*offset], printable_len - *offset, NULL);
+		int print_width;
+		if(num_bytes == (size_t)-1 || num_bytes == (size_t)-2 || (print_width = wcwidth(wc)) < 0)
+		{
+			*offset += 1; // NOT the same as ++
+			continue;
+		}
+		if(visual_col + (size_t)print_width > inner_width)
+			break; // too much
+		visual_col += (size_t)print_width;
+		*offset += num_bytes;
+	}
+	if(*offset < printable_len && message[*offset] == '\n')
+		*offset += 1; // skip past the newline character // NOT the same as ++
+}
+
 static inline size_t print_message(WINDOW *win,const size_t top_line,const size_t height_of_scrollable,const size_t must_be_processed_lines,const size_t processed_lines,const int n,const int i)
 {
 	size_t lines = 0;
@@ -3608,14 +3629,7 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 				anticipated_lines = subtract_size(anticipated_lines,required_offset); // XXX reducing anticipated lines from the end
 				size_t tmp_iter = 0;
 				for(size_t found_lines = 0; found_lines < anticipated_lines; found_lines++)
-				{ // Need to find point of necessary truncation, if applicable (printing only first part of message)
-					size_t iter = 0;
-					while(iter < inner_width && message[tmp_iter + iter] != '\n')
-						iter++;
-					tmp_iter += iter;
-					if(tmp_iter < printable_len && message[tmp_iter] == '\n')
-						tmp_iter++; // skip past the newline character
-				}
+					calculate_truncation(&tmp_iter,printable_len,message); // Need to find point of necessary truncation, if applicable (printing only first part of message)
 				truncation = printable_len - tmp_iter;
 			}
 			const size_t available_lines = (must_be_processed_lines - processed_lines > height_of_scrollable) ? height_of_scrollable : must_be_processed_lines - processed_lines;
@@ -3623,14 +3637,7 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 			if(anticipated_lines > available_lines)
 			{ // Can only print latter part of message. Offset required. XXX Must do AFTER calculating truncation.
 				for(size_t reduction_required = anticipated_lines - available_lines; reduction_required; reduction_required--)
-				{
-					size_t iter = 0;
-					while(iter < inner_width && message[offset + iter] != '\n')
-						iter++;
-					offset += iter;
-					if(offset < printable_len && message[offset] == '\n')
-						offset++; // skip past the newline character
-				}
+					calculate_truncation(&offset,printable_len,message);
 				anticipated_lines = available_lines; // XXX reducing anticipated lines from the start
 			}
 			size_t fx = align_center(inner_width);
