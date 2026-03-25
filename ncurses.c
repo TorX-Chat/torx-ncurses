@@ -612,6 +612,9 @@ static inline size_t print_internal(WINDOW *win,size_t *y,size_t *x,const size_t
 	}
 	if(printing && buf_pos > 0) // Print the final line
 		mvwaddnwstr(win,(int)(*y + offset_y),(int)(*x),line_buf,buf_pos);
+	if(line_starts && !cursor_recorded && cursor_line_out)
+		*cursor_line_out = (offset_x == max_width) ? offset_y + 1 : offset_y;
+	const size_t return_val = offset_y; // DO NOT ELIMINATE
 	if(offset_x == max_width)
 	{ // Important for cursor position (y/x output only, not return value)
 		offset_y++;
@@ -621,7 +624,7 @@ static inline size_t print_internal(WINDOW *win,size_t *y,size_t *x,const size_t
 		*y += offset_y;
 	if(x)
 		*x += offset_x;
-	return offset_y; // may be 0 if no wraps or newlines occurred
+	return return_val; // may be 0 if no wraps or newlines occurred
 }
 
 static inline size_t print_wrap(WINDOW *win,size_t *y,size_t *x,const size_t max_width,const char *str,const size_t len)
@@ -829,7 +832,8 @@ static int widget_text(WINDOW *win,size_t *y,size_t *x,const size_t max_height,c
 		if(first_visible_line + max_height > print_lines)
 			first_visible_line = print_lines - max_height;
 		print_start = line_starts[first_visible_line];
-		print_truncation = (sizeof(array) - 1) - line_starts[first_visible_line + max_height];
+		if(first_visible_line + max_height < print_lines)
+			print_truncation = (sizeof(array) - 1) - line_starts[first_visible_line + max_height];
 	}
 	prior_print_start = print_start;
 	print_wrap(win,y,x,max_width,&array[print_start],sizeof(array)-1-print_start-print_truncation);
@@ -4071,33 +4075,35 @@ static int await_key_or_signal(WINDOW *win)
 				else if(cb_page->cb_type == ENUM_ERROR)
 				{
 					uint8_t scroll = 0;
-					if(!torx_log_buffer || torx_log_buffer_pos == torx_allocation_len(torx_log_buffer) - 1)
+					if(!torx_log_buffer || torx_log_buffer_pos == torx_allocation_len(torx_log_buffer) - 2)
 						scroll = 1; // First message or already at the end, so scroll
 					shift_or_append(&torx_log_buffer,&cb_page->cb_args->mem_charp_a,&torx_log_buffer_pos);
 					if(scroll)
-						torx_log_buffer_pos = torx_allocation_len(torx_log_buffer) - 1;
+						torx_log_buffer_pos = torx_allocation_len(torx_log_buffer) - 2;
 					if(window_logs && !tor_log_mode)
 						must_redraw_ui = -2;
 				}
 				else if(cb_page->cb_type == ENUM_FATAL)
 				{
 					uint8_t scroll = 0;
-					if(!torx_log_buffer || torx_log_buffer_pos == torx_allocation_len(torx_log_buffer) - 1)
+					if(!torx_log_buffer || torx_log_buffer_pos == torx_allocation_len(torx_log_buffer) - 2)
 						scroll = 1; // First message or already at the end, so scroll
 					shift_or_append(&torx_log_buffer,&cb_page->cb_args->mem_charp_a,&torx_log_buffer_pos);
 					if(scroll)
-						torx_log_buffer_pos = torx_allocation_len(torx_log_buffer) - 1;
+						torx_log_buffer_pos = torx_allocation_len(torx_log_buffer) - 2;
 					if(window_logs && !tor_log_mode)
 						must_redraw_ui = -2;
 				}
 				else if(cb_page->cb_type == ENUM_TOR_LOG)
 				{
 					uint8_t scroll = 0;
-					if(!tor_log_buffer || tor_log_buffer_pos == torx_allocation_len(tor_log_buffer) - 1)
+					if(!tor_log_buffer || tor_log_buffer_pos == torx_allocation_len(tor_log_buffer) - 2)
 						scroll = 1; // First message or already at the end, so scroll
+					else if(tor_log_buffer)
+						error_printf(0,"Checkpoint NOT printing because %lu != %lu",tor_log_buffer_pos,torx_allocation_len(tor_log_buffer) - 2);
 					shift_or_append(&tor_log_buffer,&cb_page->cb_args->mem_charp_a,&tor_log_buffer_pos);
 					if(scroll)
-						tor_log_buffer_pos = torx_allocation_len(tor_log_buffer) - 1;
+						tor_log_buffer_pos = torx_allocation_len(tor_log_buffer) - 2;
 					if(window_logs && tor_log_mode)
 						must_redraw_ui = -2;
 				}
