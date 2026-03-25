@@ -3899,19 +3899,24 @@ static void draw_chat(void)
 
 static inline void shift_or_append(char **destination,char **source,size_t *cursor_p)
 { // NO SAFETY CHECKS: be careful not to de-reference a null. THIS IS ONLY FOR USE IN await_key_or_signal.
+	if(strlen(*source) != torx_allocation_len(*source) - 1)
+	{ // Does not trigger. Fatal error implemented for testing/debugging.
+		error_printf(-1,"Source is over-allocated");
+		return;
+	}
 	if(!*destination)
 	{ // Just shift it over
 		*destination = *source;
 		*source = NULL; // necessary in await_key_or_signal
-		*cursor_p = torx_allocation_len(*destination) - 1; // Set at end
+		*cursor_p = torx_allocation_len(*destination) - 2; // Set at end // TODO TODO TODO BAD BAD BAD should be 1 not 2
 	}
 	else
 	{ // Append
 		const size_t former_len = torx_allocation_len(*destination);
 		*destination = torx_realloc(*destination,former_len + torx_allocation_len(*source) - 1); // cut off one null pointer
 		memcpy(&(*destination)[former_len-1],*source,torx_allocation_len(*source));
-		if(*cursor_p + 1 == former_len)
-			*cursor_p = torx_allocation_len(*destination) - 1; // Set at end
+		if(*cursor_p + 2 == former_len) // TODO TODO TODO BAD BAD BAD should be 1 not 2
+			*cursor_p = torx_allocation_len(*destination) - 2; // Set at end // TODO TODO TODO BAD BAD BAD should be 1 not 2
 	}
 }
 
@@ -4074,36 +4079,19 @@ static int await_key_or_signal(WINDOW *win)
 				}
 				else if(cb_page->cb_type == ENUM_ERROR)
 				{
-					uint8_t scroll = 0;
-					if(!torx_log_buffer || torx_log_buffer_pos == torx_allocation_len(torx_log_buffer) - 2)
-						scroll = 1; // First message or already at the end, so scroll
 					shift_or_append(&torx_log_buffer,&cb_page->cb_args->mem_charp_a,&torx_log_buffer_pos);
-					if(scroll)
-						torx_log_buffer_pos = torx_allocation_len(torx_log_buffer) - 2;
 					if(window_logs && !tor_log_mode)
 						must_redraw_ui = -2;
 				}
 				else if(cb_page->cb_type == ENUM_FATAL)
 				{
-					uint8_t scroll = 0;
-					if(!torx_log_buffer || torx_log_buffer_pos == torx_allocation_len(torx_log_buffer) - 2)
-						scroll = 1; // First message or already at the end, so scroll
 					shift_or_append(&torx_log_buffer,&cb_page->cb_args->mem_charp_a,&torx_log_buffer_pos);
-					if(scroll)
-						torx_log_buffer_pos = torx_allocation_len(torx_log_buffer) - 2;
 					if(window_logs && !tor_log_mode)
 						must_redraw_ui = -2;
 				}
 				else if(cb_page->cb_type == ENUM_TOR_LOG)
 				{
-					uint8_t scroll = 0;
-					if(!tor_log_buffer || tor_log_buffer_pos == torx_allocation_len(tor_log_buffer) - 2)
-						scroll = 1; // First message or already at the end, so scroll
-					else if(tor_log_buffer)
-						error_printf(0,"Checkpoint NOT printing because %lu != %lu",tor_log_buffer_pos,torx_allocation_len(tor_log_buffer) - 2);
 					shift_or_append(&tor_log_buffer,&cb_page->cb_args->mem_charp_a,&tor_log_buffer_pos);
-					if(scroll)
-						tor_log_buffer_pos = torx_allocation_len(tor_log_buffer) - 2;
 					if(window_logs && tor_log_mode)
 						must_redraw_ui = -2;
 				}
