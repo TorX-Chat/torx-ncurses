@@ -555,59 +555,57 @@ static inline size_t cursor_back(const char* str,const size_t cur)
 }
 
 static inline size_t print_internal(WINDOW *win,size_t *y,size_t *x,const size_t max_width,const uint8_t wrap,const char *str,const size_t len)
-{ // WARNING: Pass bytes len (strlen) NOT utf8len // NOTE: y and x must be initialized
-	if(max_width && str && len)
+{ // WARNING: Pass bytes len (strlen) NOT utf8len // NOTE: y and x must be initialized // NOTE: very similar to build_line_starts
+	if(!max_width || !str || !len)
+		return 0; // Do not throw error, probably just len is 0
+	const uint8_t printing = (win && y && x) ? 1 : 0;
+	size_t offset_y = 0,offset_x = 0;
+	wchar_t line_buf[max_width + 1];
+	int buf_pos = 0; // not to be confused with offset_x
+	for(size_t iter = 0; iter < len && str[iter] != '\0'; )
 	{
-		const uint8_t printing = (win && y && x) ? 1 : 0;
-		size_t offset_y = 0,offset_x = 0;
-		wchar_t line_buf[max_width + 1];
-		int buf_pos = 0; // not to be confused with offset_x
-		for(size_t iter = 0; iter < len && str[iter] != '\0'; )
+		wchar_t wc;
+		const size_t num_bytes = mbrtowc(&wc, &str[iter], len - iter, NULL);
+		int print_width;
+		if(str[iter] != '\n' && (num_bytes == (size_t)-1 || num_bytes == (size_t)-2 || (print_width = wcwidth(wc)) < 0)) // yes this is correct, according to man page
 		{
-			wchar_t wc;
-			const size_t num_bytes = mbrtowc(&wc, &str[iter], len - iter, NULL);
-			int print_width;
-			if(str[iter] != '\n' && (num_bytes == (size_t)-1 || num_bytes == (size_t)-2 || (print_width = wcwidth(wc)) < 0)) // yes this is correct, according to man page
-			{
-				iter++;
-				continue; // invalid
-			}
-			if(str[iter] == '\n' || offset_x + (size_t)print_width > max_width)
-			{
-				if(!wrap)
-					break; // Can't print more without wrapping
-				if(printing && buf_pos > 0)
-				{
-					mvwaddnwstr(win,(int)(*y + offset_y),(int)(*x),line_buf,buf_pos);
-					buf_pos = 0;
-				}
-				offset_y++;
-				offset_x = 0;
-				if(str[iter] == '\n')
-				{
-					iter++;
-					continue; // do not print, skip
-				}
-			}
-			if(printing) // not else if
-				line_buf[buf_pos++] = wc;
-			offset_x += (size_t)print_width; // Note: +=print_width is because not all wide characters take only one column
-			iter += num_bytes;
+			iter++;
+			continue; // invalid
 		}
-		if(printing && buf_pos > 0)
-			mvwaddnwstr(win,(int)(*y + offset_y),(int)(*x),line_buf,buf_pos);
-		if(offset_x == max_width)
-		{ // Important for cursor position
+		if(str[iter] == '\n' || offset_x + (size_t)print_width > max_width)
+		{
+			if(!wrap)
+				break; // Can't print more without wrapping
+			if(printing && buf_pos > 0)
+			{
+				mvwaddnwstr(win,(int)(*y + offset_y),(int)(*x),line_buf,buf_pos);
+				buf_pos = 0;
+			}
 			offset_y++;
 			offset_x = 0;
+			if(str[iter] == '\n')
+			{
+				iter++;
+				continue; // do not print, skip
+			}
 		}
-		if(y)
-			*y = *y + offset_y;
-		if(x)
-			*x = *x + offset_x;
-		return offset_y; // may be 0 if no wraps or newlines occurred during printing
+		if(printing) // not else if
+			line_buf[buf_pos++] = wc;
+		offset_x += (size_t)print_width; // Note: +=print_width is because not all wide characters take only one column
+		iter += num_bytes;
 	}
-	return 0; // Do not throw error, probably just len is 0
+	if(printing && buf_pos > 0)
+		mvwaddnwstr(win,(int)(*y + offset_y),(int)(*x),line_buf,buf_pos);
+	if(offset_x == max_width)
+	{ // Important for cursor position
+		offset_y++;
+		offset_x = 0;
+	}
+	if(y)
+		*y = *y + offset_y;
+	if(x)
+		*x = *x + offset_x;
+	return offset_y; // may be 0 if no wraps or newlines occurred during printing
 }
 
 static inline size_t print_wrap(WINDOW *win,size_t *y,size_t *x,const size_t max_width,const char *str,const size_t len)
@@ -757,6 +755,48 @@ static int widget_checkbox(WINDOW *win,size_t *y,size_t *x,const size_t max_widt
 	return w;
 }
 
+static inline size_t build_line_starts(const size_t max_width,const char *str,const size_t len,const size_t cursor_pos,size_t *line_starts,size_t *cursor_line_out)
+{ // Single pass: builds array of byte offsets where each wrapped line starts. // NOTE: very similar to print_internal
+	if(!max_width || !str || !len || !line_starts)
+		return 0;
+	size_t offset_y = 0,offset_x = 0;
+	uint8_t cursor_recorded = 0;
+	line_starts[0] = 0; // First line starts at 0
+	for(size_t iter = 0; iter < len && str[iter] != '\0'; )
+	{ // Go through message/string looking for wraps/newlines
+		if(!cursor_recorded && iter >= cursor_pos)
+		{ // Must set cursor line DO NOT MODIFY
+			if(cursor_line_out)
+				*cursor_line_out = (offset_x == max_width) ? offset_y + 1 : offset_y; // DO NOT MODIFY
+			cursor_recorded = 1;
+		}
+		wchar_t wc;
+		const size_t num_bytes = mbrtowc(&wc,&str[iter],len - iter,NULL);
+		int print_width;
+		if(str[iter] != '\n' && (num_bytes == (size_t)-1 || num_bytes == (size_t)-2 || (print_width = wcwidth(wc)) < 0))
+		{ // Bad bytes or zero printable length, skip.
+			if(num_bytes > 0)
+				iter += num_bytes;
+			else
+				iter++;
+			continue;
+		}
+		else if(str[iter] == '\n' || offset_x + (size_t)print_width > max_width)
+		{ // Hit a newline or wrap
+			offset_x = 0;
+			if(str[iter] == '\n')
+			{ // Newline starts at next byte
+				line_starts[++offset_y] = ++iter;
+				continue;
+			}
+			line_starts[++offset_y] = iter; // Newline starts at this byte
+		}
+		offset_x += (size_t)print_width;
+		iter += num_bytes;
+	}
+	return offset_y;
+}
+
 static int widget_text(WINDOW *win,size_t *y,size_t *x,const size_t max_height,const size_t max_width,int (*callback)(const int),const int type,char **text_p,size_t *cursor_pos)
 { // Draw a text entry. Single-line SHOULD highlight when selected. Multi-line should NOT highlight when selected.
 	if(type != WIDGET_PASSWORD && type != WIDGET_INPUT_SINGLE_LINE && type != WIDGET_INPUT_MULTI_LINE && type != WIDGET_OUTPUT_MULTI_LINE && type != WIDGET_INPUT_NUMERICAL)
@@ -784,33 +824,38 @@ static int widget_text(WINDOW *win,size_t *y,size_t *x,const size_t max_height,c
 	array[text_len] = '\0';
 	if(*current_focus == w && type != WIDGET_INPUT_MULTI_LINE && type != WIDGET_OUTPUT_MULTI_LINE)
 		toggle_highlight(win); // highlight on
-	const size_t cursor_line_of_whole = print_wrap(NULL,NULL,NULL,max_width,array,cursor_pos ? *cursor_pos : 0);
+	size_t line_starts[text_len + 1];
+	size_t cursor_line_of_whole;
+	const size_t print_lines = 1 + build_line_starts(max_width,array,sizeof(array) - 1,cursor_pos ? *cursor_pos : 0,line_starts,&cursor_line_of_whole);
 	size_t print_start = 0; // number of bytes cut off from start
 	size_t print_truncation = 0; // number of bytes cut off from end
-	size_t print_lines = 1 + print_wrap(NULL,NULL,NULL,max_width,array,sizeof(array)-1);
 	if(print_lines > max_height)
-	{ // Our message exceeds box size
-		for(size_t lines_to_cut = print_lines - max_height, first_line = 0, last_line,reduction_in_lines; lines_to_cut; lines_to_cut -= reduction_in_lines,print_lines -= reduction_in_lines)
-		{ // Must cut off another line
-			last_line = first_line + max_height - 1;
-			size_t new_print_lines;
-			uint8_t shifting_forward;
-			do {
-				if(cursor_line_of_whole > last_line || (cursor_line_of_whole > first_line && print_start < prior_print_start))
-				{ // 1st: Scroll down
-					print_start++; // Can only safely go ++
-					shifting_forward = 1;
-				}
-				else
-				{ // 2nd: Cut off the excess
-					print_truncation += lines_to_cut; // Can safely and efficienctly go this far
-					shifting_forward = 0;
-				}
-			} while((new_print_lines = 1 + print_wrap(NULL,NULL,NULL,max_width,&array[print_start],sizeof(array)-1-print_start-print_truncation)) == print_lines);
-			reduction_in_lines = print_lines - new_print_lines;
-			if(shifting_forward)
-				first_line += reduction_in_lines;
+	{ // Our message exceeds box size -- determine visible window via line-start index
+		size_t first_visible_line = 0;
+		if(cursor_line_of_whole >= max_height)
+			first_visible_line = cursor_line_of_whole - (max_height - 1);
+		if(prior_print_start)
+		{ // Try to maintain prior scroll position
+			size_t prior_line = 0;
+			for(size_t i = 1; i < print_lines; i++)
+			{
+				if(line_starts[i] > prior_print_start)
+					break;
+				prior_line = i;
+			}
+			if(prior_line > first_visible_line)
+			{
+				size_t target = prior_line;
+				if(target > cursor_line_of_whole)
+					target = cursor_line_of_whole;
+				if(cursor_line_of_whole < target + max_height)
+					first_visible_line = target;
+			}
 		}
+		if(first_visible_line + max_height > print_lines)
+			first_visible_line = print_lines - max_height;
+		print_start = line_starts[first_visible_line];
+		print_truncation = (sizeof(array) - 1) - line_starts[first_visible_line + max_height];
 	}
 	prior_print_start = print_start;
 	print_wrap(win,y,x,max_width,&array[print_start],sizeof(array)-1-print_start-print_truncation);
@@ -3488,7 +3533,7 @@ static int callback_message(const int w)
 }
 
 static inline void calculate_truncation(size_t *offset,const size_t printable_len,const char *message)
-{ // Only for use in print_message TODO rename function
+{ // Only for use in print_message
 	for(size_t visual_col = 0; *offset < printable_len && message[*offset] != '\n'; )
 	{
 		wchar_t wc;
