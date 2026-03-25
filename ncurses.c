@@ -525,7 +525,10 @@ static inline size_t torx_utf8len(const char *str)
 		int print_width;
 		if(num_bytes == (size_t)-1 || num_bytes == (size_t)-2 || (print_width = wcwidth(wc)) < 0) // yes this is correct, according to man page
 		{
-			iter++;
+			if(num_bytes > 0)
+				iter += num_bytes;
+			else
+				iter++;
 			continue; // invalid, won't print
 		}
 		total += (size_t)print_width;
@@ -3517,7 +3520,10 @@ static inline void calculate_truncation(size_t *offset,const size_t printable_le
 		int print_width;
 		if(num_bytes == (size_t)-1 || num_bytes == (size_t)-2 || (print_width = wcwidth(wc)) < 0)
 		{
-			*offset += 1; // NOT the same as ++
+			if(num_bytes > 0)
+				*offset += num_bytes;
+			else
+				*offset += 1; // NOT the same as ++
 			continue;
 		}
 		if(visual_col + (size_t)print_width > inner_width)
