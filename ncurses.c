@@ -554,68 +554,84 @@ static inline size_t cursor_back(const char* str,const size_t cur)
 	return byte_movement;
 }
 
-static inline size_t print_internal(WINDOW *win,size_t *y,size_t *x,const size_t max_width,const uint8_t wrap,const char *str,const size_t len)
-{ // WARNING: Pass bytes len (strlen) NOT utf8len // NOTE: y and x must be initialized // NOTE: very similar to build_line_starts
+static inline size_t print_internal(WINDOW *win,size_t *y,size_t *x,const size_t max_width,const uint8_t wrap,const char *str,const size_t len,const size_t cursor_pos,size_t *line_starts,size_t *cursor_line_out)
+{ // WARNING: Pass bytes len (strlen) NOT utf8len // NOTE: y and x must be initialized
 	if(!max_width || !str || !len)
 		return 0; // Do not throw error, probably just len is 0
 	const uint8_t printing = (win && y && x) ? 1 : 0;
 	size_t offset_y = 0,offset_x = 0;
+	uint8_t cursor_recorded = 0;
 	wchar_t line_buf[max_width + 1];
 	int buf_pos = 0; // not to be confused with offset_x
+	if(line_starts)
+		line_starts[0] = 0; // First line starts at 0
 	for(size_t iter = 0; iter < len && str[iter] != '\0'; )
-	{
+	{ // Go through message/string looking for wraps/newlines (if line_starts), or print, as appropriate
+		if(line_starts && !cursor_recorded && iter >= cursor_pos)
+		{ // Must set cursor line DO NOT MODIFY
+			if(cursor_line_out)
+				*cursor_line_out = (offset_x == max_width) ? offset_y + 1 : offset_y; // DO NOT MODIFY
+			cursor_recorded = 1;
+		}
 		wchar_t wc;
 		const size_t num_bytes = mbrtowc(&wc, &str[iter], len - iter, NULL);
 		int print_width;
-		if(str[iter] != '\n' && (num_bytes == (size_t)-1 || num_bytes == (size_t)-2 || (print_width = wcwidth(wc)) < 0)) // yes this is correct, according to man page
-		{
-			iter++;
+		if(str[iter] != '\n' && (num_bytes == (size_t)-1 || num_bytes == (size_t)-2 || (print_width = wcwidth(wc)) < 0))
+		{ // Bad bytes or zero printable length, skip.
+			if(num_bytes > 0)
+				iter += num_bytes;
+			else
+				iter++;
 			continue; // invalid
 		}
-		if(str[iter] == '\n' || offset_x + (size_t)print_width > max_width)
-		{
+		else if(str[iter] == '\n' || offset_x + (size_t)print_width > max_width)
+		{ // Hit a newline or wrap
 			if(!wrap)
 				break; // Can't print more without wrapping
 			if(printing && buf_pos > 0)
-			{
+			{ // Print out this now complete line
 				mvwaddnwstr(win,(int)(*y + offset_y),(int)(*x),line_buf,buf_pos);
 				buf_pos = 0;
 			}
 			offset_y++;
 			offset_x = 0;
 			if(str[iter] == '\n')
-			{
+			{ // Newline starts at next byte
 				iter++;
-				continue; // do not print, skip
+				if(line_starts)
+					line_starts[offset_y] = iter;
+				continue;
 			}
+			else if(line_starts)
+				line_starts[offset_y] = iter;
 		}
 		if(printing) // not else if
-			line_buf[buf_pos++] = wc;
+			line_buf[buf_pos++] = wc; // Append character to print buffer
 		offset_x += (size_t)print_width; // Note: +=print_width is because not all wide characters take only one column
 		iter += num_bytes;
 	}
-	if(printing && buf_pos > 0)
+	if(printing && buf_pos > 0) // Print the final line
 		mvwaddnwstr(win,(int)(*y + offset_y),(int)(*x),line_buf,buf_pos);
 	if(offset_x == max_width)
-	{ // Important for cursor position
+	{ // Important for cursor position (y/x output only, not return value)
 		offset_y++;
 		offset_x = 0;
 	}
 	if(y)
-		*y = *y + offset_y;
+		*y += offset_y;
 	if(x)
-		*x = *x + offset_x;
-	return offset_y; // may be 0 if no wraps or newlines occurred during printing
+		*x += offset_x;
+	return offset_y; // may be 0 if no wraps or newlines occurred
 }
 
 static inline size_t print_wrap(WINDOW *win,size_t *y,size_t *x,const size_t max_width,const char *str,const size_t len)
 { // WARNING: Pass bytes len (strlen) NOT utf8len
-	return print_internal(win,y,x,max_width,1,str,len);
+	return print_internal(win,y,x,max_width,1,str,len,0,NULL,NULL);
 }
 
 static inline size_t print_nowrap(WINDOW *win,size_t *y,size_t *x,const size_t max_width,const char *str,const size_t len)
 { // WARNING: Pass bytes len (strlen) NOT utf8len
-	return print_internal(win,y,x,max_width,0,str,len);
+	return print_internal(win,y,x,max_width,0,str,len,0,NULL,NULL);
 }
 
 static inline void getmaxyx_size(WINDOW *win,size_t *vertical,size_t *horizontal)
@@ -755,48 +771,6 @@ static int widget_checkbox(WINDOW *win,size_t *y,size_t *x,const size_t max_widt
 	return w;
 }
 
-static inline size_t build_line_starts(const size_t max_width,const char *str,const size_t len,const size_t cursor_pos,size_t *line_starts,size_t *cursor_line_out)
-{ // Single pass: builds array of byte offsets where each wrapped line starts. // NOTE: very similar to print_internal
-	if(!max_width || !str || !len || !line_starts)
-		return 0;
-	size_t offset_y = 0,offset_x = 0;
-	uint8_t cursor_recorded = 0;
-	line_starts[0] = 0; // First line starts at 0
-	for(size_t iter = 0; iter < len && str[iter] != '\0'; )
-	{ // Go through message/string looking for wraps/newlines
-		if(!cursor_recorded && iter >= cursor_pos)
-		{ // Must set cursor line DO NOT MODIFY
-			if(cursor_line_out)
-				*cursor_line_out = (offset_x == max_width) ? offset_y + 1 : offset_y; // DO NOT MODIFY
-			cursor_recorded = 1;
-		}
-		wchar_t wc;
-		const size_t num_bytes = mbrtowc(&wc,&str[iter],len - iter,NULL);
-		int print_width;
-		if(str[iter] != '\n' && (num_bytes == (size_t)-1 || num_bytes == (size_t)-2 || (print_width = wcwidth(wc)) < 0))
-		{ // Bad bytes or zero printable length, skip.
-			if(num_bytes > 0)
-				iter += num_bytes;
-			else
-				iter++;
-			continue;
-		}
-		else if(str[iter] == '\n' || offset_x + (size_t)print_width > max_width)
-		{ // Hit a newline or wrap
-			offset_x = 0;
-			if(str[iter] == '\n')
-			{ // Newline starts at next byte
-				line_starts[++offset_y] = ++iter;
-				continue;
-			}
-			line_starts[++offset_y] = iter; // Newline starts at this byte
-		}
-		offset_x += (size_t)print_width;
-		iter += num_bytes;
-	}
-	return offset_y;
-}
-
 static int widget_text(WINDOW *win,size_t *y,size_t *x,const size_t max_height,const size_t max_width,int (*callback)(const int),const int type,char **text_p,size_t *cursor_pos)
 { // Draw a text entry. Single-line SHOULD highlight when selected. Multi-line should NOT highlight when selected.
 	if(type != WIDGET_PASSWORD && type != WIDGET_INPUT_SINGLE_LINE && type != WIDGET_INPUT_MULTI_LINE && type != WIDGET_OUTPUT_MULTI_LINE && type != WIDGET_INPUT_NUMERICAL)
@@ -826,7 +800,7 @@ static int widget_text(WINDOW *win,size_t *y,size_t *x,const size_t max_height,c
 		toggle_highlight(win); // highlight on
 	size_t line_starts[text_len + 1];
 	size_t cursor_line_of_whole;
-	const size_t print_lines = 1 + build_line_starts(max_width,array,sizeof(array) - 1,cursor_pos ? *cursor_pos : 0,line_starts,&cursor_line_of_whole);
+	const size_t print_lines = 1 + print_internal(NULL,NULL,NULL,max_width,1,array,sizeof(array) - 1,cursor_pos ? *cursor_pos : 0,line_starts,&cursor_line_of_whole);
 	size_t print_start = 0; // number of bytes cut off from start
 	size_t print_truncation = 0; // number of bytes cut off from end
 	if(print_lines > max_height)
@@ -2883,10 +2857,8 @@ static void draw_logs(void)
 		widget_text(win,&fy,&fx,subtract_size(screen_rows,2),inner_width,callback_debug_level,WIDGET_INPUT_NUMERICAL,&tmp_debug_level,&tmp_debug_level_pos);
 		fy += 1;
 	}
-if(tor_log_mode) error_simple(0,"Checkpoint scroll 1");
 	fx = align_center(inner_width);
 	widget_text(win,&fy,&fx,subtract_size(screen_rows,2),inner_width,NULL,WIDGET_OUTPUT_MULTI_LINE,tor_log_mode ? &tor_log_buffer : &torx_log_buffer,tor_log_mode ? &tor_log_buffer_pos : &torx_log_buffer_pos);
-if(tor_log_mode) error_simple(0,"Checkpoint scroll 2");
 	sodium_memzero(label,sizeof(label));
 	widget_draw_cursor(win); // XXX Must do last
 }
@@ -4098,19 +4070,34 @@ static int await_key_or_signal(WINDOW *win)
 				}
 				else if(cb_page->cb_type == ENUM_ERROR)
 				{
+					uint8_t scroll = 0;
+					if(!torx_log_buffer || torx_log_buffer_pos == torx_allocation_len(torx_log_buffer) - 1)
+						scroll = 1; // First message or already at the end, so scroll
 					shift_or_append(&torx_log_buffer,&cb_page->cb_args->mem_charp_a,&torx_log_buffer_pos);
+					if(scroll)
+						torx_log_buffer_pos = torx_allocation_len(torx_log_buffer) - 1;
 					if(window_logs && !tor_log_mode)
 						must_redraw_ui = -2;
 				}
 				else if(cb_page->cb_type == ENUM_FATAL)
 				{
+					uint8_t scroll = 0;
+					if(!torx_log_buffer || torx_log_buffer_pos == torx_allocation_len(torx_log_buffer) - 1)
+						scroll = 1; // First message or already at the end, so scroll
 					shift_or_append(&torx_log_buffer,&cb_page->cb_args->mem_charp_a,&torx_log_buffer_pos);
+					if(scroll)
+						torx_log_buffer_pos = torx_allocation_len(torx_log_buffer) - 1;
 					if(window_logs && !tor_log_mode)
 						must_redraw_ui = -2;
 				}
 				else if(cb_page->cb_type == ENUM_TOR_LOG)
 				{
+					uint8_t scroll = 0;
+					if(!tor_log_buffer || tor_log_buffer_pos == torx_allocation_len(tor_log_buffer) - 1)
+						scroll = 1; // First message or already at the end, so scroll
 					shift_or_append(&tor_log_buffer,&cb_page->cb_args->mem_charp_a,&tor_log_buffer_pos);
+					if(scroll)
+						tor_log_buffer_pos = torx_allocation_len(tor_log_buffer) - 1;
 					if(window_logs && tor_log_mode)
 						must_redraw_ui = -2;
 				}
