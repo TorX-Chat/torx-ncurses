@@ -619,7 +619,7 @@ static inline size_t print_internal(WINDOW *win,size_t *y,size_t *x,const size_t
 		*cursor_line_out = (offset_x == max_width) ? offset_y + 1 : offset_y;
 	const size_t return_val = offset_y; // DO NOT ELIMINATE
 	if(offset_x == max_width)
-	{ // Important for cursor position (y/x output only, not return value)
+	{ // Important for cursor position (y/x output only, not return value). NOTE: This is so subsequent print_wrap/print_nowrap functions right. DO NOT ELIMINATE
 		offset_y++;
 		offset_x = 0;
 	}
@@ -627,7 +627,7 @@ static inline size_t print_internal(WINDOW *win,size_t *y,size_t *x,const size_t
 		*y += offset_y;
 	if(x)
 		*x += offset_x;
-	return return_val; // may be 0 if no wraps or newlines occurred
+	return return_val; // may be 0 if no wraps or newlines occurred // DO NOT REPLACE WITH `return offset_y` because we may have modified offset_y, and callers expect pre-modified.
 }
 
 static inline size_t print_wrap(WINDOW *win,size_t *y,size_t *x,const size_t max_width,const char *str,const size_t len)
@@ -3770,10 +3770,11 @@ static void draw_chat(void)
 	else if(t_peer[n].unsent_pos >= torx_allocation_len(t_peer[n].unsent))
 		t_peer[n].unsent_pos = torx_allocation_len(t_peer[n].unsent) - 1;
 
-	const size_t visual_lines = 1 + print_wrap(NULL,NULL, NULL, inner_width, t_peer[n].unsent, torx_allocation_len(t_peer[n].unsent) - 1); // alt: t_peer[n].unsent_pos
+	size_t unsent_required_lines = 1; // XXX Do not use return from print_wrap, we need the offset_y after modification for cursor
+	print_wrap(NULL,&unsent_required_lines, NULL, inner_width, t_peer[n].unsent, torx_allocation_len(t_peer[n].unsent) - 1); // alt: t_peer[n].unsent_pos
 
 	// Draw horizontal divider
-	const size_t mid = visual_lines + 2 + TOP_LINE_HEIGHT >= screen_rows ? TOP_LINE_HEIGHT : subtract_size(screen_rows,visual_lines + 2);
+	const size_t mid = unsent_required_lines + 2 + TOP_LINE_HEIGHT >= screen_rows ? TOP_LINE_HEIGHT : subtract_size(screen_rows,unsent_required_lines + 2);
 	for(size_t x = 1; x + 1 < screen_cols; x++)
 		mvwaddch(win, (int)mid, (int)x, ACS_HLINE);
 	// Draw intersection characters
