@@ -65,7 +65,7 @@ severable if found in contradiction with the License or applicable law.
 #include <unistd.h>	// read,write,pipe,close
 #include <fcntl.h>	// related to pipe
 
-#define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.39 2026/02/12 by TorX\n© Copyright 2025 TorX.\n"
+#define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.40 2026/03/30 by TorX\n© Copyright 2026 TorX.\n"
 #define DARK_THEME 0
 #define LIGHT_THEME 1
 #define THEME_DEFAULT DARK_THEME
@@ -1971,10 +1971,7 @@ static int callback_ctrl_pass(const int w)
 		if(new_len)
 			control_password_clear = torx_copy(tmp_control_password_clear);
 		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-		if(new_len)
-			sql_setting(0,-1,"control_password_clear",tmp_control_password_clear,new_len);
-		else
-			sql_delete_setting(0,-1,"control_password_clear");
+		sql_setting(0,-1,"control_password_clear",tmp_control_password_clear,new_len); // Will delete if NULL/0
 		start_tor();
 	}
 	return 1; // Rebuild
@@ -2040,8 +2037,8 @@ static int callback_chat_logging(const int w)
 	}
 	// Save Setting
 	char p1[21];
-	snprintf(p1,sizeof(p1),"%d",log_messages);
-	sql_setting(0,peer_index,"logging",p1,strlen(p1));
+	const size_t len = (size_t)snprintf(p1,sizeof(p1),"%d",log_messages);
+	sql_setting(0,peer_index,"logging",p1,len);
 	return 1; // Rebuild
 }
 
@@ -2051,8 +2048,8 @@ static int callback_chat_notifications(const int w)
 	t_peer[global_n].mute = !t_peer[global_n].mute;
 	const int peer_index = getter_int(global_n,INT_MIN,-1,offsetof(struct peer_list,peer_index));
 	char p1[21];
-	snprintf(p1,sizeof(p1),"%d",t_peer[global_n].mute);
-	sql_setting(0,peer_index,"mute",p1,strlen(p1));
+	const size_t len = (size_t)snprintf(p1,sizeof(p1),"%d",t_peer[global_n].mute);
+	sql_setting(0,peer_index,"mute",p1,len);
 	return 1; // Rebuild
 }
 
@@ -4127,18 +4124,24 @@ static int await_key_or_signal(WINDOW *win)
 						t_peer[n].mute = (int8_t)strtoll(setting_value, NULL, 10);
 					else if(plaintext == 0 && !strncmp(setting_name,"unread",6))
 					{
-						if(log_unread != 1)
-							return 0; // ignoring (potentially old)
-						t_peer[n].unread = strtoull(setting_value, NULL, 10);
-						if(t_peer[n].unread > 0)
-						{
-							const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-							if(owner == ENUM_OWNER_GROUP_CTRL)
-								totalUnreadGroup += t_peer[n].unread;
-							else
-								totalUnreadPeer += t_peer[n].unread;
-							if(window_contacts)
-								must_redraw_ui = -2;
+						if(log_unread == 1)
+						{ // Ignoring if not logging, since they may be potentially old
+							const int8_t log_messages = getter_int8(n,INT_MIN,-1,offsetof(struct peer_list,log_messages));
+							if(log_messages == 1 || (!log_messages && threadsafe_read_uint8(&mutex_global_variable,&global_log_messages)))
+							{
+								t_peer[n].unread = strtoull(setting_value, NULL, 10);
+								if(t_peer[n].unread > 0)
+								{
+									const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+									if(owner == ENUM_OWNER_GROUP_CTRL)
+										totalUnreadGroup += t_peer[n].unread;
+									else
+										totalUnreadPeer += t_peer[n].unread;
+									if(window_contacts)
+										must_redraw_ui = -2;
+								}
+								error_printf(0,"Checkpoint unread loading n=%d unread=%lu plain=%d p_i=%d name=%s value=%s",n,t_peer[n].unread,plaintext,getter_int(n,INT_MIN,-1,offsetof(struct peer_list,peer_index)),setting_name,setting_value); // TODO TODO TODO TODO TODO
+							}
 						}
 					}
 					else if(plaintext == 0)
@@ -4387,15 +4390,23 @@ int main(int argc, char **argv)
 	char p1[21];
 	if(log_unread == 1)
 	{ // Log Unread Message Count in the same manner that we store last_seen
+		const uint8_t global_log_messages_local = threadsafe_read_uint8(&mutex_global_variable,&global_log_messages);
 		for(int peer_index,n = 0 ; (peer_index = getter_int(n,INT_MIN,-1,offsetof(struct peer_list,peer_index))) > -1 || getter_byte(n,INT_MIN,-1,offsetof(struct peer_list,onion)) != 0 ; n++)
-		{ // storing last_seen time to .key file. NOTE: this will execute more frequently than we might want if logging is disabled. however there is little we can do.
-			if(peer_index < 0)
-				continue;
-			const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-			if(owner == ENUM_OWNER_CTRL || owner == ENUM_OWNER_GROUP_CTRL)
-			{ // for private messages, will need to be more complicated than just adding GROUP_PEER here
-				snprintf(p1,sizeof(p1),"%zu",t_peer[n].unread);
-				sql_setting(0,peer_index,"unread",p1,strlen(p1));
+		{
+			const int8_t log_messages = getter_int8(n,INT_MIN,-1,offsetof(struct peer_list,log_messages));
+			if(peer_index > -1 && (log_messages == 1 || (!log_messages && global_log_messages_local)))
+			{
+				const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+				if(owner == ENUM_OWNER_CTRL || owner == ENUM_OWNER_GROUP_CTRL)
+				{ // for private messages, will need to be more complicated than just adding GROUP_PEER here
+					if(t_peer[n].unread)
+					{
+						const size_t len = (size_t)snprintf(p1,sizeof(p1),"%zu",t_peer[n].unread); // TODO TODO TODO TODO TODO
+						sql_setting(0,peer_index,"unread",p1,len);
+					}
+					else
+						sql_delete_setting(0,peer_index,"unread");
+				}
 			}
 		}
 	}
