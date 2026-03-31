@@ -1257,7 +1257,7 @@ static int keypress(const int w, const wint_t ch)
 	}
 	else if(w > - 1 && ch == KEY_DELETE && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE)
 	{
-		if(message_entry_currently_selected)
+		if(window_chat && message_entry_currently_selected)
 			*current_focus = -1; // reset to default, which is message input (yes this is necessary)
 		const size_t prior_allocation_len = torx_allocation_len(*widget[w].text);
 		if(*widget[w].cursor + 1 < prior_allocation_len)
@@ -1271,7 +1271,7 @@ static int keypress(const int w, const wint_t ch)
 	}
 	else if(w > - 1 && (ch == KEY_BACKSPACE || ch == 127 || ch == 8) && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE)
 	{
-		if(message_entry_currently_selected)
+		if(window_chat && message_entry_currently_selected)
 			*current_focus = -1; // reset to default, which is message input (yes this is necessary)
 		if(*widget[w].cursor)
 		{
@@ -1292,7 +1292,7 @@ static int keypress(const int w, const wint_t ch)
 			beep(); // do nothing, ignore invalid entry
 		else
 		{
-			if(message_entry_currently_selected)
+			if(window_chat && message_entry_currently_selected)
 				*current_focus = -1; // reset to default, which is message input (yes this is necessary)
 			append_character_at_cursor(w,ch);
 			return 1; // Rebuild
@@ -4175,6 +4175,8 @@ static int await_key_or_signal(WINDOW *win)
 								totalUnreadPeer++;
 							}
 						}
+						if(window_chat && message_entry_currently_selected)
+							*current_focus = -1; // reset to default, which is message input (yes this is necessary)
 						if(window_contacts || (global_n > -1 && (global_n == n || global_n == group_n)))
 							must_redraw_ui = -2; // better than draw_chat(global_n); // NOT n or this could draw a PM chat
 						if((window_contacts || must_redraw_ui != -2) && (owner != ENUM_OWNER_GROUP_PEER || t_peer[group_n].mute == 0) && t_peer[n].mute == 0) // NOT else if
