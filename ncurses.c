@@ -4140,7 +4140,6 @@ static int await_key_or_signal(WINDOW *win)
 									if(window_contacts)
 										must_redraw_ui = -2;
 								}
-								error_printf(0,"Checkpoint unread loading n=%d unread=%lu plain=%d p_i=%d name=%s value=%s",n,t_peer[n].unread,plaintext,getter_int(n,INT_MIN,-1,offsetof(struct peer_list,peer_index)),setting_name,setting_value); // TODO TODO TODO TODO TODO
 							}
 						}
 					}
@@ -4398,10 +4397,10 @@ int main(int argc, char **argv)
 			{
 				const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
 				if(owner == ENUM_OWNER_CTRL || owner == ENUM_OWNER_GROUP_CTRL)
-				{ // for private messages, will need to be more complicated than just adding GROUP_PEER here
+				{
 					if(t_peer[n].unread)
 					{
-						const size_t len = (size_t)snprintf(p1,sizeof(p1),"%zu",t_peer[n].unread); // TODO TODO TODO TODO TODO
+						const size_t len = (size_t)snprintf(p1,sizeof(p1),"%zu",t_peer[n].unread);
 						sql_setting(0,peer_index,"unread",p1,len);
 					}
 					else
