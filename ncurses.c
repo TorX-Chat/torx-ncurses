@@ -2625,6 +2625,18 @@ static int callback_peer(const int w)
 	return 0; // Do not rebuild
 }
 
+static inline wint_t get_online_char(const uint8_t sendfd_connected,const uint8_t recvfd_connected)
+{ // we use wint_t instead of wchar_t so we can use %lc
+	if(sendfd_connected && recvfd_connected)
+		return L'●';
+	else if(sendfd_connected)
+		return L'◓';
+	else if(recvfd_connected)
+		return L'◒';
+	else
+		return L'○';
+}
+
 static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_t *scroll_offset)
 {
 	if(!win || !fyp || !fxp || !focus || !scroll_offset)
@@ -2636,18 +2648,24 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 	{ // ui_populate_peer_popover / ui_populate_group_peerlist_popover
 		int len;
 		int *array = refined_list(&len,window_group_invite ? ENUM_OWNER_CTRL : ENUM_OWNER_GROUP_PEER,window_group_invite ? ENUM_STATUS_FRIEND : global_group,search);
+		char label[subtract_size(screen_cols,2*2) + 1];
 		while((int)iter < len && *fyp < subtract_size(screen_rows,2))
 		{
 			*fyp += 1,*fxp = 2;
 			const int n = array[iter++];
+			const uint8_t sendfd_connected = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,sendfd_connected));
+			const uint8_t recvfd_connected = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,recvfd_connected));
+			const wint_t online_char = get_online_char(sendfd_connected,recvfd_connected);
 			char *peernick = getter_string(n,INT_MIN,-1,offsetof(struct peer_list,peernick));
-			if(widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2)+1,window_group_invite ? callback_invite : callback_pm,peernick) == *focus) // the +1 is to prevent wrapping
-				treeview_n = n;
+			snprintf(label,sizeof(label),"%lc %s",online_char,peernick);
 			torx_free((void*)&peernick);
+			if(widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2)+1,window_group_invite ? callback_invite : callback_pm,label) == *focus) // the +1 is to prevent wrapping
+				treeview_n = n;
 		}
 		if((int)iter < len)
 			more_to_print = 1;
 		torx_free((void*)&array);
+		sodium_memzero(label,sizeof(label));
 	}
 	else if(win == window_contacts)
 	{
@@ -2666,13 +2684,22 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 			{
 				*fyp += 1,*fxp = 2;
 				const int n = array[iter++];
-				const uint8_t sendfd_connected = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,sendfd_connected));
-				const uint8_t recvfd_connected = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,recvfd_connected));
+				uint8_t sendfd_connected;
+				uint8_t recvfd_connected;
+				if(groups_mode == ENUM_SHOW_GROUP)
+					sendfd_connected = recvfd_connected = 1; // Always show groups as green
+				else
+				{
+					sendfd_connected = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,sendfd_connected));
+					recvfd_connected = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,recvfd_connected));
+				}
+				const wint_t online_char = get_online_char(sendfd_connected,recvfd_connected);
 				char *peernick = getter_string(n,INT_MIN,-1,offsetof(struct peer_list,peernick));
 				if(t_peer[n].unread > 0)
-					snprintf(label, sizeof(label), "(%lu) %s", t_peer[n].unread, peernick);
+					snprintf(label,sizeof(label),"%lc(%lu) %s",online_char,t_peer[n].unread,peernick);
 				else
-					snprintf(label, sizeof(label), "%s", peernick);
+					snprintf(label,sizeof(label),"%lc %s",online_char,peernick);
+				torx_free((void*)&peernick);
 				if(sendfd_connected || recvfd_connected)
 					wattron(win,A_BOLD); // bold on
 				const int w = widget_button(win,fyp,fxp,subtract_size(screen_cols,2*2),callback_peer,label);
@@ -2680,7 +2707,6 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 					selected_n = n;
 				if(sendfd_connected || recvfd_connected)
 					wattroff(win,A_BOLD); // bold off
-				torx_free((void*)&peernick);
 			}
 			if((int)iter < len)
 				more_to_print = 1;
@@ -3793,15 +3819,27 @@ static void draw_chat(void)
 	else
 		print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),text_navigation_chat,strlen(text_navigation_chat));
 
+	const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
 	// Draw top line widgets
+	char label[subtract_size(screen_cols,2*2) + 1];
+	uint8_t sendfd_connected;
+	uint8_t recvfd_connected;
+	if(owner == ENUM_OWNER_GROUP_CTRL)
+		sendfd_connected = recvfd_connected = 1; // Always show groups as green
+	else
+	{
+		sendfd_connected = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,sendfd_connected));
+		recvfd_connected = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,recvfd_connected));
+	}
+	const wint_t online_char = get_online_char(sendfd_connected,recvfd_connected);
 	char *peernick = getter_string(n,INT_MIN,-1,offsetof(struct peer_list,peernick));
+	snprintf(label,sizeof(label),"%lc %s",online_char,peernick);
+	torx_free((void*)&peernick);
 	wattron(win,A_BOLD); // bold on
 	fy = 0,fx = 2;
-	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),peernick,strlen(peernick));
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,2*2),label,strlen(label));
 	wattroff(win,A_BOLD); // bold off
-	torx_free((void*)&peernick);
 
-	char label[256];
 	snprintf(label,sizeof(label),"[ %s ]",text_settings);
 	const size_t utf8len1 = torx_utf8len(label);
 	fy = 0,fx = align_right(utf8len1);
@@ -3813,7 +3851,6 @@ static void draw_chat(void)
 	widget_button(win,&fy,&fx,utf8len2,callback_chat_actions,label);
 
 	// Get chat history height
-	const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
 	int min_i,max_i,msg_count,g;
 	struct msg_list *page;
 	if(owner == ENUM_OWNER_GROUP_CTRL)
@@ -4040,7 +4077,10 @@ static int await_key_or_signal(WINDOW *win)
 						const uint8_t owner = cb_page->cb_args->mem_uint8;
 						if((window_contacts && ((owner == ENUM_OWNER_GROUP_CTRL && groups_mode == ENUM_SHOW_GROUP) || (owner == ENUM_OWNER_CTRL && groups_mode != ENUM_SHOW_GROUP)))
 						|| (window_ids && ((single_mode && owner == ENUM_OWNER_SING) || (!single_mode && owner == ENUM_OWNER_MULT)))
-						|| (window_requests && outgoing_mode && owner == ENUM_OWNER_PEER))
+						|| (window_requests && outgoing_mode && owner == ENUM_OWNER_PEER)
+						|| (window_chat && global_n == n)
+						|| (window_group_invite && owner == ENUM_OWNER_CTRL)
+						|| (window_group_peerlist && owner == ENUM_OWNER_GROUP_PEER && global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n))))
 							must_redraw_ui = -2; // alt: draw_contacts();
 					}
 				}
@@ -4048,14 +4088,20 @@ static int await_key_or_signal(WINDOW *win)
 				{
 					const int n = cb_page->cb_args->mem_int_a;
 					const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-					if(window_contacts && owner == ENUM_OWNER_CTRL && groups_mode == ENUM_SHOW_PEER)
+					if((window_contacts && owner == ENUM_OWNER_CTRL && groups_mode == ENUM_SHOW_PEER)
+					|| (window_chat && global_n == n)
+					|| (window_group_invite && owner == ENUM_OWNER_CTRL)
+					|| (window_group_peerlist && owner == ENUM_OWNER_GROUP_PEER && global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n))))
 						must_redraw_ui = -2; // alt: draw_contacts();
 				}
 				else if(cb_page->cb_type == ENUM_PEER_OFFLINE)
 				{
 					const int n = cb_page->cb_args->mem_int_a;
 					const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-					if(window_contacts && owner == ENUM_OWNER_CTRL && groups_mode == ENUM_SHOW_PEER)
+					if((window_contacts && owner == ENUM_OWNER_CTRL && groups_mode == ENUM_SHOW_PEER)
+					|| (window_chat && global_n == n)
+					|| (window_group_invite && owner == ENUM_OWNER_CTRL)
+					|| (window_group_peerlist && owner == ENUM_OWNER_GROUP_PEER && global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n))))
 						must_redraw_ui = -2; // alt: draw_contacts();
 				}
 				else if(cb_page->cb_type == ENUM_PEER_NEW)
