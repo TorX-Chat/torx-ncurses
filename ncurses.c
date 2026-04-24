@@ -1257,11 +1257,11 @@ static int keypress(const int w, const wint_t ch)
 	}
 	else if(w > - 1 && ch == KEY_DELETE && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE)
 	{
-		if(window_chat && message_entry_currently_selected)
-			*current_focus = -1; // reset to default, which is message input (yes this is necessary)
 		const size_t prior_allocation_len = torx_allocation_len(*widget[w].text);
 		if(*widget[w].cursor + 1 < prior_allocation_len)
 		{ // DO NOT MODIFY
+			if(window_chat && message_entry_currently_selected)
+				*current_focus = -1; // reset to default, which is message input (yes this is necessary)
 			const size_t ret = cursor_forward(*widget[w].text,*widget[w].cursor);
 			memmove(&(*widget[w].text)[*widget[w].cursor], &(*widget[w].text)[*widget[w].cursor+ret], prior_allocation_len - *widget[w].cursor - ret);
 			*widget[w].text = torx_realloc(*widget[w].text,prior_allocation_len-ret); // after memmove
@@ -1271,10 +1271,10 @@ static int keypress(const int w, const wint_t ch)
 	}
 	else if(w > - 1 && (ch == KEY_BACKSPACE || ch == 127 || ch == 8) && widget[w].cursor && widget[w].text && widget[w].type != WIDGET_OUTPUT_MULTI_LINE)
 	{
-		if(window_chat && message_entry_currently_selected)
-			*current_focus = -1; // reset to default, which is message input (yes this is necessary)
 		if(*widget[w].cursor)
 		{
+			if(window_chat && message_entry_currently_selected)
+				*current_focus = -1; // reset to default, which is message input (yes this is necessary)
 			const size_t removal = cursor_back(*widget[w].text,*widget[w].cursor);
 			const size_t prior_allocation_len = torx_allocation_len(*widget[w].text);
 			memmove(&(*widget[w].text)[*widget[w].cursor-removal], &(*widget[w].text)[*widget[w].cursor], prior_allocation_len - *widget[w].cursor);
