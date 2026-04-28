@@ -64,11 +64,13 @@ severable if found in contradiction with the License or applicable law.
 #include <locale.h>	// setlocale, for utilizing utf8
 #include <unistd.h>	// read,write,pipe,close
 #include <fcntl.h>	// related to pipe
+#include <beep.h>
 
 #define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.40 2026/03/30 by TorX\n© Copyright 2026 TorX.\n"
 #define DARK_THEME 0
 #define LIGHT_THEME 1
 #define THEME_DEFAULT DARK_THEME
+#define FILENAME_BEEP "beep.wav"
 
 static struct t_peer_list {
 	char *unsent;
@@ -102,6 +104,9 @@ static inline void initialize_library(void (*callback)(void))
 		memcpy(tor_data_directory,tdd_full_path,(size_t)tdd_len);
 		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
 	}
+
+	if(!get_file_size(FILENAME_BEEP))
+		write_bytes(FILENAME_BEEP,beep_wav,beep_wav_len);
 
 	if(no_password)
 		login_start("");
@@ -856,7 +861,25 @@ static int widget_text(WINDOW *win,size_t *y,size_t *x,const size_t max_height,c
 static void notify(const char *heading, const char *message)
 { // TODO placeholder notification function. Should consider whether a peer is muted before notifying. See usage of ui_notify in main_gtk4.c.
 	error_printf(0,"Popover notification of some type!!! BEEP!!! Header: %s Message: %s",heading,message);
-	beep();
+	#ifdef WIN32
+	{ // call PlaySound asyncronously to prevent having to CreateProcess
+		PlaySound(FILENAME_BEEP, NULL, SND_FILENAME | SND_ASYNC);
+	}
+	#else
+	{
+		pid_t pid;
+		if((pid = fork()) == -1)
+			error_simple(-1,"fork");
+		if(pid == 0)
+		{ // Alternatively, gresource can probably provide the audio to stdin on *nix but probably not on windows
+			if(execlp("paplay","paplay",FILENAME_BEEP,NULL))
+				if(execlp("aplay","aplay","-q",FILENAME_BEEP,NULL))
+					if(execlp("afplay","afplay","-q",FILENAME_BEEP,NULL)) // OSX, untested
+						beep(); // DO NOT MAKE error_printf, as its forked
+			exit(0); // TODO wait() or waitpid() to clean up
+		}
+	}
+	#endif
 }
 
 static int callback_password(const int w)

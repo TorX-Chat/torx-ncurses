@@ -9,7 +9,7 @@ This page is primarily for developers and contributors.
 ##### Linux:
 
 ###### Install build dependencies:
-`sudo apt install git cmake libsodium-dev libevent-dev libsqlcipher-dev build-essential libncurses-dev`
+`sudo apt install git cmake xxd libsodium-dev libevent-dev libsqlcipher-dev build-essential libncurses-dev`
 
 ###### Install runtime dependencies:
 `sudo apt install tor snowflake-client obfs4proxy`

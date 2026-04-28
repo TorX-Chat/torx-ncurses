@@ -63,6 +63,19 @@ endif()
 message(STATUS "${PROJECT_NAME} C_FLAGS being set to: ${CMAKE_C_FLAGS}")
 ## END BLOCK
 
+set(BEEP_WAV ${CMAKE_CURRENT_SOURCE_DIR}/other/beep.wav)
+set(BEEP_H ${CMAKE_CURRENT_BINARY_DIR}/beep.h)
+
+find_program(XXD xxd REQUIRED)
+
+add_custom_command(
+	OUTPUT ${BEEP_H}
+	COMMAND ${XXD} -i -n beep_wav beep.wav ${BEEP_H}
+	DEPENDS ${BEEP_WAV}
+	WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/other
+	VERBATIM
+)
+
 find_library(torx NAMES torx PATHS ${CMAKE_INSTALL_LIBDIR})
 find_path(TORX_INCLUDE_DIR NAMES torx.h PATHS ${CMAKE_INSTALL_INCLUDEDIR})
 
@@ -70,7 +83,7 @@ if(TORX_INCLUDE_DIR AND torx)
 	message(STATUS "TorX library found; NOT building.") # TODO maybe verify that it is appropriately shared / static if BUILD_SHARED_LIBS was passed?
 else()
 	message(STATUS "TorX library NOT found; Building.")
-	set(NO_QR_GENERATOR 1)
+#	set(NO_QR_GENERATOR 1) # Need this for write_bytes
 	set(NO_AUDIO_CALL 1)
 	set(NO_STICKERS 1)
 	set(NO_FILE_TRANSFER 1)
@@ -83,12 +96,12 @@ else()
 	FetchContent_MakeAvailable(torx)
 endif()
 
-add_executable( ${PROJECT_NAME} ncurses.c )
+add_executable( ${PROJECT_NAME} ncurses.c ${BEEP_H})
 
 find_library(NCURSESW_LIBRARY ncursesw)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(NCURSESW REQUIRED ncursesw) # Must support UTF8
-target_include_directories(${PROJECT_NAME} PRIVATE ${NCURSESW_INCLUDE_DIRS})
+target_include_directories(${PROJECT_NAME} PRIVATE ${NCURSESW_INCLUDE_DIRS} ${CMAKE_CURRENT_BINARY_DIR}) # CMAKE_CURRENT_BINARY_DIR is for BEEP_H
 
 add_compile_definitions(SQLITE_HAS_CODEC SECURE_MALLOC) # necessary, not redundant
 
