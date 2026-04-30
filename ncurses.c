@@ -66,7 +66,7 @@ severable if found in contradiction with the License or applicable law.
 #include <fcntl.h>	// related to pipe
 #include <beep.h>
 
-#define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.40 2026/03/30 by TorX\n© Copyright 2026 TorX.\n"
+#define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.41 2026/04/30 by TorX\n© Copyright 2026 TorX.\n"
 #define DARK_THEME 0
 #define LIGHT_THEME 1
 #define THEME_DEFAULT DARK_THEME
