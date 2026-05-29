@@ -827,7 +827,9 @@ static int widget_text(WINDOW *win,size_t *y,size_t *x,const size_t max_height,c
 	widget[w].callback = callback;
 	widget[w].text = text_p;
 	widget[w].cursor = cursor_pos;
-	char array[text_bytes + 1]; // zero'd
+	const size_t array_len = (!pw_show && type == WIDGET_PASSWORD) ? text_bytes + 1 : 0; // only allocate a array when masking
+	char mask_buf[array_len]; // zero'd // 0 byte (unused) for non-masked widgets
+	const char *source; // mask_buf, or *text_p
 	size_t cursor_local = cursor_pos ? *cursor_pos : 0; // For passwords, this is translated below into the masked array's coordinates
 	if(!pw_show && type == WIDGET_PASSWORD)
 	{ // Mask with one '*' per character (NOT per byte), so wide/multibyte chars render correctly and the cursor stays aligned
@@ -835,21 +837,22 @@ static int widget_text(WINDOW *win,size_t *y,size_t *x,const size_t max_height,c
 		size_t out = 0;
 		for(size_t iter = 0; iter < text_bytes; out++)
 		{
-			array[out] = '*';
+			mask_buf[out] = '*';
 			iter += cursor_forward(*text_p,iter);
 			if(iter <= real_cursor)
-			cursor_local = out + 1; // masked cursor = count of characters fully before the real cursor
+				cursor_local = out + 1; // masked cursor = count of characters fully before the real cursor
 		}
 		text_bytes = out; // masked length (<= byte length); subsequent wrapping/cursor logic operates on the mask
+		mask_buf[text_bytes] = '\0';
+		source = mask_buf;
 	}
 	else
-		snprintf(array,sizeof(array),"%s",*text_p);
-	array[text_bytes] = '\0';
+		source = *text_p; // render directly, no copy (trailing newline excluded via text_bytes length, not truncation)
 	if(*current_focus == w && type != WIDGET_INPUT_MULTI_LINE && type != WIDGET_OUTPUT_MULTI_LINE)
 		toggle_highlight(win); // highlight on
 	size_t line_starts[text_bytes + 1];
 	size_t cursor_line_of_whole;
-	const size_t print_lines = 1 + print_internal(NULL,NULL,NULL,max_width,1,array,text_bytes,cursor_local,line_starts,&cursor_line_of_whole);
+	const size_t print_lines = 1 + print_internal(NULL,NULL,NULL,max_width,1,source,text_bytes,cursor_local,line_starts,&cursor_line_of_whole);
 	size_t print_start = 0; // number of bytes cut off from start
 	size_t print_truncation = 0; // number of bytes cut off from end
 	if(print_lines > max_height)
@@ -882,17 +885,17 @@ static int widget_text(WINDOW *win,size_t *y,size_t *x,const size_t max_height,c
 			print_truncation = text_bytes - line_starts[first_visible_line + max_height];
 	}
 	prior_print_start = print_start;
-	print_wrap(win,y,x,max_width,&array[print_start],text_bytes-print_start-print_truncation);
+	print_wrap(win,y,x,max_width,&source[print_start],text_bytes-print_start-print_truncation);
 	if(*current_focus == w)
 	{
 		if(type != WIDGET_INPUT_MULTI_LINE && type != WIDGET_OUTPUT_MULTI_LINE)
 			toggle_highlight(win); // highlight off
 		size_t row = start_y, col = start_x;
-		print_wrap(NULL,&row, &col, max_width, &array[print_start], cursor_pos ? cursor_local - print_start: 0);
+		print_wrap(NULL,&row, &col, max_width, &source[print_start], cursor_pos ? cursor_local - print_start: 0);
 		widget_set_cursor(row, col);
 		curs_set(1);
 	}
-	sodium_memzero(array,sizeof(array));
+	sodium_memzero(mask_buf,sizeof(mask_buf));
 	return w;
 }
 
