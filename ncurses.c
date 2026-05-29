@@ -498,7 +498,7 @@ static const char *text_groupid = {0};
 static const char *text_successfully_created_group = {0};
 static const char *text_error_creating_group = {0};
 static const char *text_censored_region = {0};
-static const char *text_invite_friend = {0};  // unused in GTK
+static const char *text_invite_friend = {0}; // unused in GTK
 static const char *text_group_peers = {0}; // unused in GTK
 static const char *text_incoming_call = {0};
 
@@ -523,6 +523,27 @@ static inline size_t torx_utf8len(const char *str)
 		}
 		total += (size_t)print_width;
 		iter += num_bytes;
+	}
+	return total;
+}
+
+static inline size_t torx_utf8count(const char *str)
+{ // Counts characters (wide or otherwise), NOT visible columns. BREAKS at newlines.
+	if(!str)
+		return 0;
+	const size_t len = strlen(str); // cannot use torx_allocation_len because this is commonly used on other allocation types
+	size_t total = 0;
+	for(size_t iter = 0; iter < len && str[iter] != '\n'; ) // not necessary to check for \0 because we called strlen
+	{
+		wchar_t wc;
+		const size_t num_bytes = mbrtowc(&wc, &str[iter], len - iter, NULL); // convert a multibyte sequence to a wide character
+		if(num_bytes == (size_t)-1 || num_bytes == (size_t)-2)
+		{
+			iter++; // invalid, skip one byte
+			continue;
+		}
+		total++; // count one character regardless of its visible width
+		iter += num_bytes ? num_bytes : 1; // num_bytes == 0 means embedded \0, but len ensures we won't loop forever
 	}
 	return total;
 }
@@ -798,38 +819,37 @@ static int widget_text(WINDOW *win,size_t *y,size_t *x,const size_t max_height,c
 		return 0;
 	const size_t start_y = *y, start_x = *x;
 	size_t text_bytes = (text_p && *text_p) ? strlen(*text_p) : 0;
-//	size_t text_len = (text_p && *text_p) ? torx_utf8len(*text_p) : 0;
 	if(type == WIDGET_OUTPUT_MULTI_LINE && text_bytes && (*text_p)[text_bytes-1] == '\n')
-	{
 		text_bytes--; // strip trailing newline on outputs
-//		text_len--;
-	}
 	if(cursor_pos && *cursor_pos > text_bytes)
 		*cursor_pos = text_bytes; // Necesary to mitigate bugs
-//	if(cursor_pos && *cursor_pos > text_len)
-//		*cursor_pos = text_len; // Necesary to mitigate bugs
 	const int w = widget_new(type,max_width);
 	widget[w].callback = callback;
 	widget[w].text = text_p;
 	widget[w].cursor = cursor_pos;
 	char array[text_bytes + 1]; // zero'd
+	size_t cursor_local = cursor_pos ? *cursor_pos : 0; // For passwords, this is translated below into the masked array's coordinates
 	if(!pw_show && type == WIDGET_PASSWORD)
-//	{
-		memset(array,'*',sizeof(array)-1);
-//		array[text_len] = '\0';
-//	}
+	{ // Mask with one '*' per character (NOT per byte), so wide/multibyte chars render correctly and the cursor stays aligned
+		const size_t real_cursor = cursor_local;
+		size_t out = 0;
+		for(size_t iter = 0; iter < text_bytes; out++)
+		{
+			array[out] = '*';
+			iter += cursor_forward(*text_p,iter);
+			if(iter <= real_cursor)
+			cursor_local = out + 1; // masked cursor = count of characters fully before the real cursor
+		}
+		text_bytes = out; // masked length (<= byte length); subsequent wrapping/cursor logic operates on the mask
+	}
 	else
-//	{
 		snprintf(array,sizeof(array),"%s",*text_p);
-//		array[text_bytes] = '\0';
-//	}
 	array[text_bytes] = '\0';
 	if(*current_focus == w && type != WIDGET_INPUT_MULTI_LINE && type != WIDGET_OUTPUT_MULTI_LINE)
 		toggle_highlight(win); // highlight on
 	size_t line_starts[text_bytes + 1];
-//	size_t line_starts[text_len + 1];
 	size_t cursor_line_of_whole;
-	const size_t print_lines = 1 + print_internal(NULL,NULL,NULL,max_width,1,array,sizeof(array) - 1,cursor_pos ? *cursor_pos : 0,line_starts,&cursor_line_of_whole);
+	const size_t print_lines = 1 + print_internal(NULL,NULL,NULL,max_width,1,array,text_bytes,cursor_local,line_starts,&cursor_line_of_whole);
 	size_t print_start = 0; // number of bytes cut off from start
 	size_t print_truncation = 0; // number of bytes cut off from end
 	if(print_lines > max_height)
@@ -859,16 +879,16 @@ static int widget_text(WINDOW *win,size_t *y,size_t *x,const size_t max_height,c
 			first_visible_line = print_lines - max_height;
 		print_start = line_starts[first_visible_line];
 		if(first_visible_line + max_height < print_lines)
-			print_truncation = (sizeof(array) - 1) - line_starts[first_visible_line + max_height];
+			print_truncation = text_bytes - line_starts[first_visible_line + max_height];
 	}
 	prior_print_start = print_start;
-	print_wrap(win,y,x,max_width,&array[print_start],sizeof(array)-1-print_start-print_truncation);
+	print_wrap(win,y,x,max_width,&array[print_start],text_bytes-print_start-print_truncation);
 	if(*current_focus == w)
 	{
 		if(type != WIDGET_INPUT_MULTI_LINE && type != WIDGET_OUTPUT_MULTI_LINE)
 			toggle_highlight(win); // highlight off
 		size_t row = start_y, col = start_x;
-		print_wrap(NULL,&row, &col, max_width, &(*text_p)[print_start], cursor_pos ? *cursor_pos - print_start: 0);
+		print_wrap(NULL,&row, &col, max_width, &array[print_start], cursor_pos ? cursor_local - print_start: 0);
 		widget_set_cursor(row, col);
 		curs_set(1);
 	}
@@ -1140,7 +1160,7 @@ static int keypress(const int w, const wint_t ch)
 		{ // DO NOT MODIFY
 			if(current_scroll_offset && widgets_existing_before_scrollable && *current_focus + 1 == (int)widgets_existing_before_scrollable)
 				*current_scroll_offset = 0; // NOTE: Scroll offset, NOT focus. Optional jump to start of scrollable.
-			if(*current_focus + 1 ==  (int)(torx_allocation_len(widget) / sizeof(struct widget)))
+			if(*current_focus + 1 == (int)(torx_allocation_len(widget) / sizeof(struct widget)))
 			{ // NOT else if
 				*current_focus = 0;
 				if(current_scroll_offset && !widgets_existing_before_scrollable)
@@ -1594,7 +1614,7 @@ after each comes online and receives the code.";
 		text_debug_level = "Current Debug Level:";
 		text_debug_level_notice = "Debug level resets for safety on restart.";
 		text_fatal_error = "Fatal Error";
-		text_active =  "Active";
+		text_active = "Active";
 		text_identifier = "Identifier";
 		text_onionid = "OnionID";
 		text_torxid = "TorX-ID";
@@ -1603,7 +1623,7 @@ after each comes online and receives the code.";
 		text_successfully_created_group = "Successfully created group";
 		text_error_creating_group = "Error creating group";
 		text_censored_region = "Censored Region";
-		text_invite_friend = "Invite Friend";  // unused in GTK
+		text_invite_friend = "Invite Friend"; // unused in GTK
 		text_group_peers = "Group Peers"; // unused in GTK
 		text_incoming_call = "Incoming Call";
 	}
@@ -2413,21 +2433,21 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 		{
 			*fyp += 2, *fxp = align_center(torx_utf8len(text_old_password));
 			print_wrap(win,fyp,fxp,printable_width,text_old_password,strlen(text_old_password));
-			*fyp += 1, *fxp = align_center(torx_utf8len(password_old));
+			*fyp += 1, *fxp = align_center(pw_show ? torx_utf8len(password_old) : torx_utf8count(password_old));
 			widget_text(win,fyp,fxp,subtract_size(screen_rows,*fyp),printable_width,NULL,WIDGET_PASSWORD,&password_old,&pw_old_cursor);
 		}
 		else if(item_to_draw == 1)
 		{
 			*fyp += 2, *fxp = align_center(torx_utf8len(text_new_password));
 			print_wrap(win,fyp,fxp,printable_width,text_new_password,strlen(text_new_password));
-			*fyp += 1, *fxp = align_center(torx_utf8len(password_new));
+			*fyp += 1, *fxp = align_center(pw_show ? torx_utf8len(password_new) : torx_utf8count(password_new));
 			widget_text(win,fyp,fxp,subtract_size(screen_rows,*fyp),printable_width,NULL,WIDGET_PASSWORD,&password_new,&pw_new_cursor);
 		}
 		else if(item_to_draw == 2)
 		{
 			*fyp += 2, *fxp = align_center(torx_utf8len(text_new_password_again));
 			print_wrap(win,fyp,fxp,printable_width,text_new_password_again,strlen(text_new_password_again));
-			*fyp += 1, *fxp = align_center(torx_utf8len(password_verify));
+			*fyp += 1, *fxp = align_center(pw_show ? torx_utf8len(password_verify) : torx_utf8count(password_verify));
 			widget_text(win,fyp,fxp,subtract_size(screen_rows,*fyp),printable_width,NULL,WIDGET_PASSWORD,&password_verify,&pw_verify_cursor);
 		}
 		else if(item_to_draw == 3)
