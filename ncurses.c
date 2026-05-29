@@ -1114,7 +1114,7 @@ static int keypress(const int w, const wint_t ch)
 		go_back(1);
 	else if(w > - 1 && (ch == L'\t' || ch == KEY_BTAB))
 	{
-		if(window_chat && *current_focus == (int)widgets_existing_before_scrollable)
+		if(window_chat && *current_focus == (int)widgets_existing_before_scrollable && (int)(torx_allocation_len(widget) / sizeof(struct widget)) > (int)widgets_existing_before_scrollable + 1)
 			*current_focus = (int)(torx_allocation_len(widget) / sizeof(struct widget)) - 1; // skip to last widget (latest message -> unsent)
 		else if(current_scroll_offset && *current_focus + 1 == (int)(torx_allocation_len(widget) / sizeof(struct widget)) && more_to_print)
 			*current_scroll_offset += 1; // NOT the same as ++ // At end, need to move down, without current_focus
@@ -3625,7 +3625,7 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 			timebuffer = torx_realloc(timebuffer,torx_allocation_len(timebuffer)-3); // Slice off seconds
 			timebuffer[torx_allocation_len(timebuffer)-1] = '\0';
 			timebuffer_len = torx_allocation_len(timebuffer);
-			if(stat == ENUM_MESSAGE_FAIL)
+			if(stat == ENUM_MESSAGE_FAIL && owner != ENUM_OWNER_GROUP_CTRL)
 				for(int iter = (int)timebuffer_len - 2; iter > -1; iter--)
 					if(timebuffer[iter] >= '0' && timebuffer[iter] <= '9')
 						timebuffer[iter] = '-'; // Replace digits with - if the message is unsent
