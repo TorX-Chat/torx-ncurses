@@ -64,6 +64,8 @@ severable if found in contradiction with the License or applicable law.
 #include <locale.h>	// setlocale, for utilizing utf8
 #include <unistd.h>	// read,write,pipe,close
 #include <fcntl.h>	// related to pipe
+#include <dirent.h>	// opendir,readdir,closedir (file/folder picker)
+#include <sys/stat.h>	// stat,S_ISDIR,mkdir (file/folder picker)
 #include <beep.h>
 
 #define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.41 2026/04/30 by TorX\n© Copyright 2026 TorX.\n"
@@ -138,8 +140,14 @@ static void draw_group_invite(void);
 static void draw_group_peerlist(void);
 static void draw_contacts(void);
 static void draw_chat(void);
+static void draw_picker(void);
 static int await_key_or_signal(WINDOW *win);
 static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_t *scroll_offset);
+static int callback_browse_tor_location(const int w);
+static int callback_browse_snowflake_location(const int w);
+static int callback_browse_lyrebird_location(const int w);
+static int callback_browse_conjure_location(const int w);
+static int callback_browse_download_dir(const int w);
 void async_notifier(void);
 
 enum {
@@ -153,6 +161,11 @@ enum widget_types {
 	WIDGET_INPUT_NUMERICAL,
 	WIDGET_OUTPUT_MULTI_LINE,
 	WIDGET_CHECKBOX
+};
+enum picker_modes {
+	PICKER_FILE,	// select a single file (ENTER on a file finishes)
+	PICKER_FILES,	// select multiple files (toggle, then Done)
+	PICKER_DIR	// select a directory (navigate into it, then Done)
 };
 
 static struct widget {
@@ -168,8 +181,8 @@ static WINDOW **window_current = NULL;
 static int *current_focus = NULL; // XXX must be set otherwise we will dereference a NULL very quick! XXX
 static size_t *current_scroll_offset = NULL; // WARNING: Is null if no scrollable in route
 // XXX START One required for each route START XXX
-static int focus_login = -1, focus_settings = -1, focus_requests = -1, focus_ids = -1, focus_popover = -1, focus_contacts = -1, focus_chat = -1, focus_logs = -1, focus_torrc = -1, focus_change_password = -1, focus_generate = -1, focus_global_kill = -1, focus_chat_actions = -1, focus_message_actions = -1, focus_chat_settings = -1, focus_group_invite = -1, focus_group_peerlist = -1; // must initialize as -1 so that draw_* can set a default
-static WINDOW *window_login = NULL, *window_settings = NULL, *window_requests = NULL, *window_ids = NULL, *window_requests_popover = NULL, *window_ids_popover = NULL, *window_contacts = NULL, *window_chat = NULL, *window_logs = NULL, *window_torrc = NULL, *window_change_password = NULL, *window_generate = NULL, *window_global_kill = NULL, *window_chat_actions = NULL, *window_message_actions = NULL, *window_chat_settings = NULL, *window_group_invite = NULL, *window_group_peerlist = NULL;
+static int focus_login = -1, focus_settings = -1, focus_requests = -1, focus_ids = -1, focus_popover = -1, focus_contacts = -1, focus_chat = -1, focus_logs = -1, focus_torrc = -1, focus_change_password = -1, focus_generate = -1, focus_global_kill = -1, focus_chat_actions = -1, focus_message_actions = -1, focus_chat_settings = -1, focus_group_invite = -1, focus_group_peerlist = -1, focus_picker = -1; // must initialize as -1 so that draw_* can set a default
+static WINDOW *window_login = NULL, *window_settings = NULL, *window_requests = NULL, *window_ids = NULL, *window_requests_popover = NULL, *window_ids_popover = NULL, *window_contacts = NULL, *window_chat = NULL, *window_logs = NULL, *window_torrc = NULL, *window_change_password = NULL, *window_generate = NULL, *window_global_kill = NULL, *window_chat_actions = NULL, *window_message_actions = NULL, *window_chat_settings = NULL, *window_group_invite = NULL, *window_group_peerlist = NULL, *window_picker = NULL;
 // XXX END One required for each route END XXX
 
 static void (*redraw)(void) = NULL;
@@ -269,10 +282,6 @@ static char *tmp_auto_accept_mult = NULL;
 static char *tmp_tor_socks_port = NULL;
 static char *tmp_tor_ctrl_port = NULL;
 static char *tmp_control_password_clear = NULL;
-static size_t tmp_snowflake_location_pos = 0;
-static size_t tmp_lyrebird_location_pos = 0;
-static size_t tmp_conjure_location_pos = 0;
-static size_t tmp_tor_location_pos = 0;
 static size_t tmp_threads_max_pos = 0;
 static size_t tmp_suffix_length_pos = 0;
 static size_t tmp_sing_expiration_days_pos = 0;
@@ -306,6 +315,22 @@ static size_t group_invite_scroll_offset = 0;
 
 /* Group Peerlist State */
 static size_t group_peerlist_scroll_offset = 0;
+
+/* Picker state (file / folder picker) */
+static uint8_t picker_mode = PICKER_FILE; // PICKER_FILE / PICKER_FILES / PICKER_DIR
+static char *picker_dir = NULL; // directory currently being browsed
+static char **picker_selected = NULL; // PICKER_FILES: array of selected full paths
+static char *picker_focused_name = NULL; // name of the focused entry (dirs carry a trailing platform_slash)
+static uint8_t picker_focused_is_dir = 0;
+static int picker_len = 0; // entry count from the last draw (for PgUp/PgDn clamping)
+static size_t picker_scroll_offset = 0;
+static char *picker_newdir = NULL; // PICKER_DIR: "Create New" name entry buffer
+static size_t picker_newdir_pos = 0;
+static char **picker_result = NULL; // staged result delivered to picker_callback by go_back
+static void (*picker_callback)(char **selected) = NULL; // invoked with the result (array consumed/freed by us afterward)
+static void (*picker_return)(void) = NULL; // route to redraw once the picker closes
+static char **picker_location_target = NULL; // binary-location button: which tmp_*_location to write (e.g. &tmp_tor_location)
+static int (*picker_location_apply)(const int) = NULL; // binary-location button: apply callback to invoke (e.g. callback_tor_location)
 
 /* Scrollable state */
 static uint8_t more_to_print = 0;
@@ -392,6 +417,8 @@ static const char *text_choose_file = {0};
 static const char *text_choose_files = {0};
 static const char *text_choose_folder = {0};
 static const char *text_open_folder = {0};
+static const char *text_done = {0};
+static const char *text_create_new = {0};
 static const char *text_cancel = {0};
 static const char *text_transfer_paused = {0};
 static const char *text_transfer_rejected = {0};
@@ -1136,6 +1163,34 @@ static void go_back(size_t motions)
 			else // Must prepare prior to destruction
 				window_prepare(&draw_ids_popover,&window_ids_popover,&focus_popover);
 		}
+		else if(window_picker)
+		{ // Deliver staged result (if any), free picker state, return to the invoking route
+			if(picker_result && picker_callback)
+				picker_callback(picker_result);
+			if(picker_result)
+			{
+				for(size_t j = 0; j < torx_allocation_len(picker_result) / sizeof(char*); j++)
+					torx_free((void*)&picker_result[j]);
+				torx_free((void*)&picker_result);
+			}
+			if(picker_selected)
+			{
+				for(size_t j = 0; j < torx_allocation_len(picker_selected) / sizeof(char*); j++)
+					torx_free((void*)&picker_selected[j]);
+				torx_free((void*)&picker_selected);
+			}
+			torx_free((void*)&picker_dir);
+			torx_free((void*)&picker_focused_name);
+			torx_free((void*)&picker_newdir);
+			picker_newdir_pos = 0;
+			picker_callback = NULL;
+			void (*ret)(void) = picker_return;
+			picker_return = NULL;
+			if(ret)
+				ret(); // Pickers are leaf dialogs, exited with go_back(1)
+			else
+				running = false; // safety
+		}
 		else
 			error_printf(0,"No window to navigate to. Possible coding error.");
 	}
@@ -1224,6 +1279,19 @@ static int keypress(const int w, const wint_t ch)
 			chat_scroll_lines = 0;
 			return 1;
 		}
+	}
+	else if(w > - 1 && window_picker && (ch == KEY_PPAGE || ch == KEY_NPAGE))
+	{ // PgUp / PgDn through the file list a page at a time
+		const size_t page = subtract_size(screen_rows,4); // approximate visible list height
+		if(ch == KEY_PPAGE)
+			picker_scroll_offset = picker_scroll_offset > page ? picker_scroll_offset - page : 0;
+		else
+		{ // PgDn: advance a page but clamp so the tail is reachable without overshooting
+			const size_t max_offset = picker_len > (int)page ? (size_t)picker_len - page : 0;
+			picker_scroll_offset = picker_scroll_offset + page < max_offset ? picker_scroll_offset + page : max_offset;
+		}
+		*current_focus = (int)widgets_existing_before_scrollable; // land on the first now-visible entry
+		return 1;
 	}
 	else if(w > - 1 && ch == KEY_END)
 	{ // Targets single lines entries. Must go AFTER prior usage in window_chat and MULTI_LINE.
@@ -1512,6 +1580,8 @@ static void ui_initialize_language(void)
 		text_choose_files = "Choose Files";
 		text_choose_folder = "Choose Folder";
 		text_open_folder = "Open Folder";
+		text_done = "Done";
+		text_create_new = "Create New";
 		text_cancel = "Cancel";
 		text_transfer_paused = "Transfer Paused";
 		text_transfer_cancelled = "Transfer Cancelled";
@@ -1721,6 +1791,11 @@ after each comes online and receives the code.";
 		//text_copy_all = "全选复制";
 		text_start = "开始";
 		text_pause = "暂停";
+		text_choose_file = "选择文件";
+		text_choose_files = "选择多个文件";
+		text_choose_folder = "选择文件夹";
+		text_done = "完成";
+		text_create_new = "新建";
 		text_cancel = "取消";
 		text_save_qr = "保存二维码";
 		text_copy_qr = "复制二维码";
@@ -2273,12 +2348,13 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			widget_button(win,fyp,fxp,printable_width,callback_global_log_messages,selected);
 		}
 		else if(item_to_draw == 4)
-		{ // Select Tor binary location (effective immediately)
+		{ // Select Tor binary location (effective immediately). The path itself is the button; ENTER opens the file picker.
 			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_tor,text_binary_location);
 			*fyp += 2, *fxp = 2;
 			print_wrap(win, fyp, fxp, printable_width, label_text, len);
-			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_tor_location));
-			widget_text(win,fyp,fxp,1,printable_width,callback_tor_location,WIDGET_INPUT_SINGLE_LINE,&tmp_tor_location,&tmp_tor_location_pos);
+			const char *loc = (tmp_tor_location && *tmp_tor_location) ? tmp_tor_location : text_choose_file; // placeholder keeps the button visible/focusable when unset
+			*fyp += 1,*fxp = align_right(torx_utf8len(loc));
+			widget_button(win,fyp,fxp,printable_width,callback_browse_tor_location,loc);
 			sodium_memzero(label_text,len);
 		}
 		else if(item_to_draw == 5)
@@ -2286,8 +2362,9 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_snowflake,text_binary_location);
 			*fyp += 2, *fxp = 2;
 			print_wrap(win, fyp, fxp, printable_width, label_text, len);
-			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_snowflake_location));
-			widget_text(win,fyp,fxp,1,printable_width,callback_snowflake_location,WIDGET_INPUT_SINGLE_LINE,&tmp_snowflake_location,&tmp_snowflake_location_pos);
+			const char *loc = (tmp_snowflake_location && *tmp_snowflake_location) ? tmp_snowflake_location : text_choose_file; // placeholder keeps the button visible/focusable when unset
+			*fyp += 1,*fxp = align_right(torx_utf8len(loc));
+			widget_button(win,fyp,fxp,printable_width,callback_browse_snowflake_location,loc);
 			sodium_memzero(label_text,len);
 		}
 		else if(item_to_draw == 6)
@@ -2295,8 +2372,9 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_lyrebird,text_binary_location);
 			*fyp += 2, *fxp = 2;
 			print_wrap(win, fyp, fxp, printable_width, label_text, len);
-			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_lyrebird_location));
-			widget_text(win,fyp,fxp,1,printable_width,callback_lyrebird_location,WIDGET_INPUT_SINGLE_LINE,&tmp_lyrebird_location,&tmp_lyrebird_location_pos);
+			const char *loc = (tmp_lyrebird_location && *tmp_lyrebird_location) ? tmp_lyrebird_location : text_choose_file; // placeholder keeps the button visible/focusable when unset
+			*fyp += 1,*fxp = align_right(torx_utf8len(loc));
+			widget_button(win,fyp,fxp,printable_width,callback_browse_lyrebird_location,loc);
 			sodium_memzero(label_text,len);
 		}
 		else if(item_to_draw == 7)
@@ -2304,8 +2382,9 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_conjure,text_binary_location);
 			*fyp += 2, *fxp = 2;
 			print_wrap(win, fyp, fxp, printable_width, label_text, len);
-			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_conjure_location));
-			widget_text(win,fyp,fxp,1,printable_width,callback_conjure_location,WIDGET_INPUT_SINGLE_LINE,&tmp_conjure_location,&tmp_conjure_location_pos);
+			const char *loc = (tmp_conjure_location && *tmp_conjure_location) ? tmp_conjure_location : text_choose_file; // placeholder keeps the button visible/focusable when unset
+			*fyp += 1,*fxp = align_right(torx_utf8len(loc));
+			widget_button(win,fyp,fxp,printable_width,callback_browse_conjure_location,loc);
 			sodium_memzero(label_text,len);
 		}
 		else if(item_to_draw == 8)
@@ -2367,6 +2446,18 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			print_wrap(win, fyp, fxp, printable_width, text_set_tor_password, strlen(text_set_tor_password));
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_control_password_clear));
 			widget_text(win,fyp,fxp,1,printable_width,callback_ctrl_pass,WIDGET_INPUT_SINGLE_LINE,&tmp_control_password_clear,&tmp_control_password_clear_pos);
+		}
+		else if(item_to_draw == 16)
+		{ // Select Download Directory. The path itself is the button; ENTER opens the directory picker.
+			*fyp += 2, *fxp = 2;
+			print_wrap(win, fyp, fxp, printable_width, text_set_download_directory, strlen(text_set_download_directory));
+			pthread_rwlock_rdlock(&mutex_global_variable); // 🟧
+			char *dd_local = torx_copy(download_dir); // copy under lock; NULL if unset
+			pthread_rwlock_unlock(&mutex_global_variable); // 🟩 (lock NOT held across widget_button/print_wrap)
+			const char *dd = (dd_local && *dd_local) ? dd_local : text_choose_folder; // placeholder keeps the button visible/focusable when unset
+			*fyp += 1,*fxp = align_right(torx_utf8len(dd));
+			widget_button(win,fyp,fxp,printable_width,callback_browse_download_dir,dd);
+			torx_free((void*)&dd_local);
 			return 0; // Printed last (XXX IMPORTANT: sets more_to_print XXX)
 		}
 		else
@@ -2701,6 +2792,259 @@ static inline wint_t get_online_char(const uint8_t sendfd_connected,const uint8_
 		return L'○';
 }
 
+static int picker_cmp(const void *a,const void *b)
+{ // Sort directories (trailing platform_slash) before files, then case-insensitively. For use in picker_list only.
+	const char *sa = *(const char *const *)a, *sb = *(const char *const *)b;
+	const size_t la = torx_allocation_len(sa) - 1, lb = torx_allocation_len(sb) - 1;
+	const uint8_t da = (la && sa[la-1] == platform_slash) ? 1 : 0, db = (lb && sb[lb-1] == platform_slash) ? 1 : 0;
+	if(da != db)
+		return da ? -1 : 1;
+	for(size_t i = 0; ; i++)
+	{ // case-insensitive compare without relying on locale/ctype
+		const unsigned char ca = (sa[i] >= 'A' && sa[i] <= 'Z') ? (unsigned char)(sa[i] + 32) : (unsigned char)sa[i];
+		const unsigned char cb = (sb[i] >= 'A' && sb[i] <= 'Z') ? (unsigned char)(sb[i] + 32) : (unsigned char)sb[i];
+		if(ca != cb || !ca)
+			return (int)ca - (int)cb;
+	}
+}
+
+static char **picker_list(int *len,const char *dir,const uint8_t dirs_only)
+{ // Returns a sorted array of entry names; directories carry a trailing platform_slash. ".." is always index 0. Caller frees each entry and the array.
+	char **array = torx_insecure_malloc(sizeof(char*)); // index 0 is always ".."
+	const size_t dotdot_len = 2 + 1 + 1; // ".." + slash + null
+	array[0] = torx_insecure_malloc(dotdot_len);
+	snprintf(array[0],dotdot_len,"..%c",platform_slash);
+	*len = 1;
+	DIR *dp = dir ? opendir(dir) : NULL;
+	if(dp)
+	{
+		const size_t dir_len = torx_allocation_len(dir) - 1;
+		for(struct dirent *entry; (entry = readdir(dp)) ; )
+		{
+			const char *name = entry->d_name;
+			if(name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0')))
+				continue; // skip only "." and ".." (".." is provided synthetically at index 0)
+			const size_t name_len = strlen(name);
+			char full[dir_len + 1 + name_len + 1]; // zero'd below
+			snprintf(full,sizeof(full),"%s%c%s",dir,platform_slash,name);
+			struct stat st;
+			const uint8_t is_dir = (stat(full,&st) == 0 && S_ISDIR(st.st_mode)) ? 1 : 0;
+			sodium_memzero(full,sizeof(full));
+			if(dirs_only && !is_dir)
+				continue;
+			const size_t entry_len = name_len + (is_dir ? 1 : 0) + 1;
+			char *stored = torx_insecure_malloc(entry_len);
+			if(is_dir)
+				snprintf(stored,entry_len,"%s%c",name,platform_slash);
+			else
+				snprintf(stored,entry_len,"%s",name);
+			array = torx_realloc(array,sizeof(char*) * (size_t)(*len + 1));
+			array[(*len)++] = stored;
+		}
+		closedir(dp);
+		if(*len > 2)
+			qsort(&array[1],(size_t)(*len - 1),sizeof(char*),picker_cmp); // ".." stays first
+	}
+	return array;
+}
+
+static char *picker_parent(const char *dir)
+{ // Returns a heap copy of dir with the last path component removed (navigate up one level)
+	const size_t len = dir ? torx_allocation_len(dir) - 1 : 0;
+	size_t cut = len;
+	while(cut > 0 && dir[cut-1] != platform_slash)
+		cut--; // back up to the slash before the last component
+	if(cut > 1)
+		cut--; // drop the trailing slash, unless that would leave nothing (keep root slash)
+	else
+		cut = 1;
+	char *parent = torx_insecure_malloc(cut + 1);
+	if(dir)
+		memcpy(parent,dir,cut);
+	else
+		parent[0] = platform_slash; // dir==NULL → cut==1, yield root
+	parent[cut] = '\0';
+	return parent;
+}
+
+static uint8_t picker_dir_writable(const char *path)
+{ // Returns 1 if path (a directory) is writable, by creating and removing a probe file
+	char temp_file_path[PATH_MAX];
+	snprintf(temp_file_path,sizeof(temp_file_path),"%s%cjgIYZZHLdU9gCKud1VxptmJlH3zWd0bA",path,platform_slash); // random string must not clash with any file on the user's device
+	FILE *file = fopen(temp_file_path,"wb");
+	if(file == NULL)
+	{
+		error_simple(0,"Directory is not writable. Choose a different directory.");
+		return 0; // not writable
+	}
+	fclose(file); file = NULL;
+	remove(temp_file_path);
+	return 1; // writable
+}
+
+static int picker_selection_index(const char *path)
+{ // PICKER_FILES: index of path in picker_selected, or -1
+	if(picker_selected && path)
+		for(size_t j = 0; j < torx_allocation_len(picker_selected) / sizeof(char*); j++)
+			if(!strcmp(picker_selected[j],path))
+				return (int)j;
+	return -1;
+}
+
+static uint8_t picker_is_selected(const char *path)
+{
+	return picker_selection_index(path) > -1 ? 1 : 0;
+}
+
+static void picker_toggle_selection(const char *path)
+{ // PICKER_FILES: add path to the selection, or remove it if already present
+	const int idx = picker_selection_index(path);
+	const size_t count = picker_selected ? torx_allocation_len(picker_selected) / sizeof(char*) : 0;
+	if(idx > -1)
+	{
+		torx_free((void*)&picker_selected[idx]);
+		for(size_t j = (size_t)idx; j + 1 < count; j++)
+			picker_selected[j] = picker_selected[j+1];
+		if(count > 1)
+			picker_selected = torx_realloc(picker_selected,sizeof(char*) * (count - 1));
+		else
+			torx_free((void*)&picker_selected);
+	}
+	else
+	{
+		const size_t l = strlen(path) + 1;
+		char *copy = torx_insecure_malloc(l);
+		memcpy(copy,path,l);
+		if(picker_selected)
+			picker_selected = torx_realloc(picker_selected,sizeof(char*) * (count + 1));
+		else
+			picker_selected = torx_insecure_malloc(sizeof(char*));
+		picker_selected[count] = copy;
+	}
+}
+
+static char **picker_single(const char *path)
+{ // Build a one-element result array holding a copy of path
+	char **result = torx_insecure_malloc(sizeof(char*));
+	const size_t l = strlen(path) + 1;
+	result[0] = torx_insecure_malloc(l);
+	memcpy(result[0],path,l);
+	return result;
+}
+
+static int callback_picker_cancel(const int w)
+{
+	(void)w;
+	go_back(1); // picker_result stays NULL, so nothing is delivered
+	return 0; // Do not rebuild
+}
+
+static int callback_picker_done(const int w)
+{
+	(void)w;
+	if(picker_mode == PICKER_DIR)
+	{
+		if(!picker_dir_writable(picker_dir))
+		{
+			beep(); // not writable (helper also logs); stay in the picker
+			return 0; // Nothing changed; do not rebuild / go_back
+		}
+		picker_result = picker_single(picker_dir);
+	}
+	else if(picker_mode == PICKER_FILES && picker_selected)
+	{ // Hand off a copy of the selection (go_back frees picker_selected independently)
+		const size_t count = torx_allocation_len(picker_selected) / sizeof(char*);
+		picker_result = torx_insecure_malloc(sizeof(char*) * count);
+		for(size_t j = 0; j < count; j++)
+		{
+			const size_t l = strlen(picker_selected[j]) + 1;
+			picker_result[j] = torx_insecure_malloc(l);
+			memcpy(picker_result[j],picker_selected[j],l);
+		}
+	}
+	else if(picker_mode == PICKER_FILE && picker_focused_name && !picker_focused_is_dir)
+	{
+		const size_t dir_len = torx_allocation_len(picker_dir) - 1, name_len = torx_allocation_len(picker_focused_name) - 1;
+		char full[dir_len + 1 + name_len + 1];
+		snprintf(full,sizeof(full),"%s%c%s",picker_dir,platform_slash,picker_focused_name);
+		picker_result = picker_single(full);
+		sodium_memzero(full,sizeof(full));
+	}
+	go_back(1);
+	return 0; // Do not rebuild
+}
+
+static int callback_picker_entry(const int w)
+{ // Acts on the focused entry (picker_focused_name / picker_focused_is_dir, set during draw_scrollable)
+	(void)w;
+	if(!picker_focused_name)
+		return 0;
+	if(picker_focused_is_dir)
+	{ // Navigate: ".." goes up, otherwise descend
+		const size_t name_len = torx_allocation_len(picker_focused_name) - 1; // includes trailing slash
+		char *newdir;
+		if(name_len == 3 && picker_focused_name[0] == '.' && picker_focused_name[1] == '.')
+			newdir = picker_parent(picker_dir);
+		else
+		{
+			const size_t dir_len = torx_allocation_len(picker_dir) - 1, bare = name_len - 1; // strip trailing slash
+			const size_t l = dir_len + 1 + bare + 1;
+			newdir = torx_insecure_malloc(l);
+			snprintf(newdir,l,"%s%c%.*s",picker_dir,platform_slash,(int)bare,picker_focused_name);
+		}
+		DIR *probe = opendir(newdir);
+		if(!probe)
+		{ // Not readable (permissions, vanished, etc.); stay put and signal
+			beep();
+			torx_free((void*)&newdir);
+			return 0; // Do not rebuild
+		}
+		closedir(probe);
+		torx_free((void*)&picker_dir);
+		picker_dir = newdir;
+		picker_scroll_offset = 0;
+		focus_picker = -1; // default focus back to the first entry
+		torx_free((void*)&picker_focused_name);
+		return 1; // Rebuild
+	}
+	const size_t dir_len = torx_allocation_len(picker_dir) - 1, name_len = torx_allocation_len(picker_focused_name) - 1;
+	char full[dir_len + 1 + name_len + 1];
+	snprintf(full,sizeof(full),"%s%c%s",picker_dir,platform_slash,picker_focused_name);
+	if(picker_mode == PICKER_FILES)
+	{
+		picker_toggle_selection(full);
+		sodium_memzero(full,sizeof(full));
+		return 1; // Rebuild to update the selection highlight
+	}
+	picker_result = picker_single(full); // PICKER_FILE: deliver and close
+	sodium_memzero(full,sizeof(full));
+	go_back(1);
+	return 0; // Do not rebuild
+}
+
+static int callback_picker_create(const int w)
+{ // PICKER_DIR: create picker_newdir inside picker_dir
+	(void)w;
+	if(!picker_newdir || torx_allocation_len(picker_newdir) < 2)
+	{
+		beep(); // nothing typed in the name field; nothing changes
+		return 0; // Do not rebuild
+	}
+	const size_t dir_len = torx_allocation_len(picker_dir) - 1, name_len = torx_allocation_len(picker_newdir) - 1;
+	char full[dir_len + 1 + name_len + 1];
+	snprintf(full,sizeof(full),"%s%c%s",picker_dir,platform_slash,picker_newdir);
+	#ifdef WIN32
+	if(mkdir(full))
+	#else
+	if(mkdir(full,0700))
+	#endif
+		beep(); // creation failed (already exists / no permission)
+	sodium_memzero(full,sizeof(full));
+	torx_free((void*)&picker_newdir);
+	picker_newdir_pos = 0;
+	return 1; // Rebuild so the new directory appears in the list (and the field clears)
+}
+
 static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_t *scroll_offset)
 {
 	if(!win || !fyp || !fxp || !focus || !scroll_offset)
@@ -2818,6 +3162,48 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 			torx_free((void*)&array);
 		}
 	}
+	else if(win == window_picker)
+	{ // One scrollable column of filenames. Directories carry a trailing slash; selected files (PICKER_FILES) are shown inverted.
+		int len;
+		char **entries = picker_list(&len,picker_dir,picker_mode == PICKER_DIR);
+		picker_len = len; // cached for PgUp/PgDn clamping
+		const size_t dir_len = picker_dir ? torx_allocation_len(picker_dir) - 1 : 0;
+		char label[printable_width + 1];
+		while((int)iter < len && *fyp < subtract_size(screen_rows,2))
+		{
+			*fyp += 1,*fxp = 2;
+			const char *name = entries[iter++];
+			const size_t name_len = torx_allocation_len(name) - 1;
+			const uint8_t is_dir = (name_len && name[name_len-1] == platform_slash) ? 1 : 0;
+			uint8_t selected = 0;
+			if(picker_mode == PICKER_FILES && !is_dir)
+			{
+				char full[dir_len + 1 + name_len + 1];
+				snprintf(full,sizeof(full),"%s%c%s",picker_dir,platform_slash,name);
+				selected = picker_is_selected(full);
+				sodium_memzero(full,sizeof(full));
+			}
+			snprintf(label,sizeof(label),"%s",name);
+			if(selected)
+				toggle_highlight(win); // baseline reversed; composed with widget_button's focus toggle this yields (focused XOR selected)
+			const int wgt = widget_button(win,fyp,fxp,printable_width+1,callback_picker_entry,label); // the +1 is to prevent wrapping (and the spurious blank line a full-width name leaves)
+			if(selected)
+				toggle_highlight(win);
+			if(*focus == wgt)
+			{ // Remember the focused entry for the entry/Done callbacks
+				torx_free((void*)&picker_focused_name);
+				picker_focused_name = torx_insecure_malloc(name_len + 1);
+				memcpy(picker_focused_name,name,name_len + 1);
+				picker_focused_is_dir = is_dir;
+			}
+		}
+		if((int)iter < len)
+			more_to_print = 1;
+		for(int j = 0; j < len; j++)
+			torx_free((void*)&entries[j]);
+		torx_free((void*)&entries);
+		sodium_memzero(label,sizeof(label));
+	}
 	else
 	{
 		int ret;
@@ -2847,6 +3233,147 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 		redraw();
 		return;
 	}*/
+}
+
+static void draw_picker(void)
+{ // File / Folder Picker Route. Behaviour is governed by picker_mode (set via picker_open).
+	WINDOW *win = window_prepare(&draw_picker,&window_picker,&focus_picker); // XXX Must do first
+	if(!picker_dir)
+	{ // Default to the current working directory
+		char cwd[PATH_MAX]; // zero'd below
+		if(getcwd(cwd,sizeof(cwd)))
+		{
+			const size_t l = strlen(cwd) + 1;
+			picker_dir = torx_insecure_malloc(l);
+			memcpy(picker_dir,cwd,l);
+		}
+		else
+		{
+			picker_dir = torx_insecure_malloc(2);
+			picker_dir[0] = platform_slash, picker_dir[1] = '\0';
+		}
+		sodium_memzero(cwd,sizeof(cwd));
+	}
+
+	size_t fy = 0,fx = 2;
+	// Header (top left, bold)
+	const char *header = picker_mode == PICKER_FILES ? text_choose_files : picker_mode == PICKER_DIR ? text_choose_folder : text_choose_file;
+	wattron(win,A_BOLD); // bold on
+	print_nowrap(win,&fy,&fx,printable_width,header,strlen(header));
+	wattroff(win,A_BOLD); // bold off
+
+	// Cancel + Done buttons (top right). Created first so KEY_UP from the first file reaches them (as in draw_chat).
+	char label[256];
+	snprintf(label,sizeof(label),"[ %s ]",text_done);
+	const size_t done_len = torx_utf8len(label);
+	snprintf(label,sizeof(label),"[ %s ]",text_cancel);
+	const size_t cancel_len = torx_utf8len(label);
+	fy = 0,fx = align_right(cancel_len + 1 + done_len);
+	widget_button(win,&fy,&fx,cancel_len,callback_picker_cancel,label);
+	snprintf(label,sizeof(label),"[ %s ]",text_done);
+	fy = 0,fx = align_right(done_len);
+	widget_button(win,&fy,&fx,done_len,callback_picker_done,label);
+
+	// Create New (directory picker only): name entry + button
+	if(picker_mode == PICKER_DIR)
+	{
+		snprintf(label,sizeof(label),"[ %s ]",text_create_new);
+		const size_t create_len = torx_utf8len(label);
+		fy = 1,fx = 2;
+		const size_t field_width = subtract_size(align_right(create_len),fx + 1);
+		widget_text(win,&fy,&fx,1,field_width ? field_width : 1,callback_picker_create,WIDGET_INPUT_SINGLE_LINE,&picker_newdir,&picker_newdir_pos);
+		fy = 1,fx = align_right(create_len);
+		widget_button(win,&fy,&fx,create_len,callback_picker_create,label);
+	}
+
+	// Current directory path
+	const size_t path_row = picker_mode == PICKER_DIR ? 2 : 1;
+	fy = path_row,fx = 2;
+	print_nowrap(win,&fy,&fx,subtract_size(screen_cols,fx*2),picker_dir,strlen(picker_dir));
+
+	widget_next_has_default_focus(); // XXX default focus = first file in the list
+	fy = path_row,fx = 2; // draw_scrollable starts each entry with *fyp += 1, so the list begins just below the path
+	draw_scrollable(win,&fy,&fx,&focus_picker,&picker_scroll_offset);
+
+	sodium_memzero(label,sizeof(label));
+	widget_draw_cursor(win); // XXX Must do last
+}
+
+static void picker_open(const uint8_t mode,const char *start_dir,void (*on_done)(char **selected),void (*return_route)(void))
+{ // Open the picker. on_done receives the result array (consumed/freed afterward); return_route is redrawn when the picker closes.
+	picker_mode = mode;
+	torx_free((void*)&picker_dir);
+	if(start_dir)
+	{
+		const size_t l = strlen(start_dir) + 1;
+		picker_dir = torx_insecure_malloc(l);
+		memcpy(picker_dir,start_dir,l);
+	}
+	torx_free((void*)&picker_focused_name);
+	torx_free((void*)&picker_newdir);
+	picker_newdir_pos = 0;
+	if(picker_selected)
+	{
+		for(size_t j = 0; j < torx_allocation_len(picker_selected) / sizeof(char*); j++)
+			torx_free((void*)&picker_selected[j]);
+		torx_free((void*)&picker_selected);
+	}
+	picker_scroll_offset = 0;
+	focus_picker = -1;
+	picker_callback = on_done;
+	picker_return = return_route;
+	draw_picker();
+}
+
+static void picker_done_location(char **selected)
+{ // PICKER_FILE delivers a one-element array. Writes the chosen path to the staged tmp_*_location, then applies it via the existing callback.
+	if(selected && selected[0] && picker_location_target)
+	{
+		torx_free((void*)picker_location_target);
+		*picker_location_target = torx_copy(selected[0]); // path is non-sensitive
+		if(picker_location_apply)
+			picker_location_apply(0); // writes the global under mutex, sql_setting, start_tor()
+	}
+}
+
+static int callback_browse_location(char **target,int (*apply)(const int))
+{ // Shared by the four binary-location browse buttons: open a PICKER_FILE rooted at the current location's directory
+	picker_location_target = target;
+	picker_location_apply = apply;
+	char *start = (*target && strchr(*target,platform_slash)) ? picker_parent(*target) : NULL;
+	picker_open(PICKER_FILE,start,picker_done_location,&draw_settings);
+	torx_free((void*)&start); // picker_open copied it
+	return 0; // picker drew itself
+}
+
+static int callback_browse_tor_location(const int w){ (void)w; return callback_browse_location(&tmp_tor_location,callback_tor_location); }
+static int callback_browse_snowflake_location(const int w){ (void)w; return callback_browse_location(&tmp_snowflake_location,callback_snowflake_location); }
+static int callback_browse_lyrebird_location(const int w){ (void)w; return callback_browse_location(&tmp_lyrebird_location,callback_lyrebird_location); }
+static int callback_browse_conjure_location(const int w){ (void)w; return callback_browse_location(&tmp_conjure_location,callback_conjure_location); }
+
+static void picker_done_download_dir(char **selected)
+{ // PICKER_DIR delivers the chosen directory. Sets the libtorx global under mutex and persists it (plaintext setting, matching the loader).
+	if(selected && selected[0])
+	{
+		const size_t l = strlen(selected[0]);
+		pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
+		torx_free((void*)&download_dir);
+		download_dir = torx_secure_malloc(l + 1); // sensitive: matches libtorx's allocation
+		memcpy(download_dir,selected[0],l + 1);
+		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+		sql_setting(1,-1,"download_dir",selected[0],l);
+	}
+}
+
+static int callback_browse_download_dir(const int w)
+{
+	(void)w;
+	pthread_rwlock_rdlock(&mutex_global_variable); // 🟧
+	char *start = torx_copy(download_dir); // NULL → picker defaults to cwd
+	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+	picker_open(PICKER_DIR,start,picker_done_download_dir,&draw_settings);
+	torx_free((void*)&start);
+	return 0; // picker drew itself
 }
 
 static int callback_torrc(const int w)
@@ -3244,10 +3771,6 @@ static int callback_settings(const int w)
 	tmp_control_password_clear = torx_copy(control_password_clear);
 	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
 
-	tmp_snowflake_location_pos = tmp_snowflake_location ? torx_allocation_len(tmp_snowflake_location) - 1 : 0;
-	tmp_lyrebird_location_pos = tmp_lyrebird_location ? torx_allocation_len(tmp_lyrebird_location) - 1 : 0;
-	tmp_conjure_location_pos = tmp_conjure_location ? torx_allocation_len(tmp_conjure_location) - 1 : 0;
-	tmp_tor_location_pos = tmp_tor_location ? torx_allocation_len(tmp_tor_location) - 1 : 0;
 	tmp_threads_max_pos = torx_allocation_len(tmp_threads_max) - 1;
 	tmp_suffix_length_pos = torx_allocation_len(tmp_suffix_length) - 1;
 	tmp_sing_expiration_days_pos = torx_allocation_len(tmp_sing_expiration_days) - 1;

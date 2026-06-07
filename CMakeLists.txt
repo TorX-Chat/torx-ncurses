@@ -86,7 +86,7 @@ else()
 #	set(NO_QR_GENERATOR 1) # Need this for write_bytes
 	set(NO_AUDIO_CALL 1)
 	set(NO_STICKERS 1)
-	set(NO_FILE_TRANSFER 1)
+#	set(NO_FILE_TRANSFER 1)
 	include(FetchContent)
 	FetchContent_Declare(
 		torx
