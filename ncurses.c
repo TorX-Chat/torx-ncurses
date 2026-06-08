@@ -62,6 +62,7 @@ severable if found in contradiction with the License or applicable law.
 #include <torx.h>
 #include <ncurses.h>
 #include <locale.h>	// setlocale, for utilizing utf8
+#include <wctype.h>	// towlower (case-insensitive, locale/utf8-aware search)
 #include <unistd.h>	// read,write,pipe,close
 #include <fcntl.h>	// related to pipe
 #include <dirent.h>	// opendir,readdir,closedir (file/folder picker)
@@ -1183,6 +1184,7 @@ static void go_back(size_t motions)
 			torx_free((void*)&picker_dir);
 			torx_free((void*)&picker_focused_name);
 			torx_free((void*)&picker_newdir);
+			torx_free((void*)&search); // clear the picker's filter so it doesn't leak back into the invoking route's search
 			picker_newdir_pos = 0;
 			picker_callback = NULL;
 			void (*ret)(void) = picker_return;
@@ -1431,7 +1433,7 @@ static int keypress(const int w, const wint_t ch)
 			return 1; // Rebuild
 		}
 	}
-	else if(window_contacts || window_ids || window_requests || window_group_invite || window_group_peerlist)
+	else if(window_contacts || window_ids || window_requests || window_group_invite || window_group_peerlist || window_picker)
 	{ // Handle search entry XXX WARNING: Do not do operations on a widget[w]. There may be no widget. XXX
 		size_t allocation = torx_allocation_len(search);
 		if(ch == KEY_BACKSPACE || ch == 127 || ch == 8)
@@ -1441,6 +1443,8 @@ static int keypress(const int w, const wint_t ch)
 				allocation -= cursor_back(search,allocation - 1);
 				search = torx_realloc(search,allocation);
 				search[allocation-1] = '\0';
+				if(window_picker)
+					picker_scroll_offset = 0,focus_picker = -1; // filter changed; keep scroll/focus valid against the (now larger) list
 				return 1;
 			}
 		}
@@ -1461,6 +1465,8 @@ static int keypress(const int w, const wint_t ch)
 			memcpy(&search[allocation - length_of_specific_char - 1],buff,length_of_specific_char);
 			search[allocation - 1] = '\0'; // redundant
 			sodium_memzero(buff,sizeof(buff));
+			if(window_picker)
+				picker_scroll_offset = 0,focus_picker = -1; // filter changed; keep scroll/focus valid against the (now smaller) list
 			return 1;
 		}
 		beep();
@@ -2811,6 +2817,28 @@ static int picker_cmp(const void *a,const void *b)
 	}
 }
 
+static uint8_t picker_name_matches(const char *name,const char *needle)
+{ // Case-insensitive (locale/utf8-aware) prefix match. A NULL/empty needle matches everything. For use in picker_list only.
+	if(!needle || !needle[0])
+		return 1;
+	const size_t name_len = strlen(name), needle_len = strlen(needle);
+	size_t ni = 0,hi = 0; // byte offsets into needle and name
+	while(needle[ni])
+	{
+		wchar_t wn,wh;
+		const size_t nb_n = mbrtowc(&wn,&needle[ni],needle_len - ni,NULL); // next needle character
+		if(nb_n == (size_t)-1 || nb_n == (size_t)-2 || nb_n == 0)
+			return 0; // invalid/incomplete needle
+		const size_t nb_h = mbrtowc(&wh,&name[hi],name_len - hi,NULL); // next name character
+		if(nb_h == (size_t)-1 || nb_h == (size_t)-2 || nb_h == 0)
+			return 0; // name ended (or invalid) before needle did → not a prefix
+		if(towlower((wint_t)wn) != towlower((wint_t)wh))
+			return 0;
+		ni += nb_n,hi += nb_h;
+	}
+	return 1; // every needle character matched as a prefix of name
+}
+
 static char **picker_list(int *len,const char *dir,const uint8_t dirs_only)
 { // Returns a sorted array of entry names; directories carry a trailing platform_slash. ".." is always index 0. Caller frees each entry and the array.
 	char **array = torx_insecure_malloc(sizeof(char*)); // index 0 is always ".."
@@ -2827,6 +2855,8 @@ static char **picker_list(int *len,const char *dir,const uint8_t dirs_only)
 			const char *name = entry->d_name;
 			if(name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0')))
 				continue; // skip only "." and ".." (".." is provided synthetically at index 0)
+			if(!picker_name_matches(name,search))
+				continue; // search filter (".." at index 0 stays, so navigating up remains possible while filtering)
 			const size_t name_len = strlen(name);
 			char full[dir_len + 1 + name_len + 1]; // zero'd below
 			snprintf(full,sizeof(full),"%s%c%s",dir,platform_slash,name);
@@ -3008,6 +3038,7 @@ static int callback_picker_entry(const int w)
 		picker_scroll_offset = 0;
 		focus_picker = -1; // default focus back to the first entry
 		torx_free((void*)&picker_focused_name);
+		torx_free((void*)&search); // clear the filter when changing directories
 		return 1; // Rebuild
 	}
 	const size_t dir_len = torx_allocation_len(picker_dir) - 1, name_len = torx_allocation_len(picker_focused_name) - 1;
@@ -3277,6 +3308,12 @@ static void draw_picker(void)
 	fy = 0,fx = align_right(done_len);
 	widget_button(win,&fy,&fx,done_len,callback_picker_done,label);
 
+	if(search)
+	{ // Current search filter, right-aligned just left of the Cancel + Done buttons (mirrors draw_contacts)
+		fy = 0,fx = align_right(torx_utf8len(search) + 1 + cancel_len + 1 + done_len);
+		print_nowrap(win,&fy,&fx,subtract_size(screen_cols,fx+2),search,strlen(search));
+	}
+
 	// Create New (directory picker only): name entry + button
 	if(picker_mode == PICKER_DIR)
 	{
@@ -3305,6 +3342,7 @@ static void draw_picker(void)
 static void picker_open(const uint8_t mode,const char *start_dir,void (*on_done)(char **selected),void (*return_route)(void))
 { // Open the picker. on_done receives the result array (consumed/freed afterward); return_route is redrawn when the picker closes.
 	picker_mode = mode;
+	torx_free((void*)&search); // start unfiltered; also prevents a stale search (e.g. from the contact list) carrying in
 	torx_free((void*)&picker_dir);
 	if(start_dir)
 	{
