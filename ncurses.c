@@ -417,6 +417,7 @@ static const char *text_choose_file = {0};
 static const char *text_choose_files = {0};
 static const char *text_choose_folder = {0};
 static const char *text_open_folder = {0};
+static const char *text_send_files = {0};
 static const char *text_done = {0};
 static const char *text_create_new = {0};
 static const char *text_cancel = {0};
@@ -1580,6 +1581,7 @@ static void ui_initialize_language(void)
 		text_choose_files = "Choose Files";
 		text_choose_folder = "Choose Folder";
 		text_open_folder = "Open Folder";
+		text_send_files = "Send Files";
 		text_done = "Done";
 		text_create_new = "Create New";
 		text_cancel = "Cancel";
@@ -1794,6 +1796,7 @@ after each comes online and receives the code.";
 		text_choose_file = "选择文件";
 		text_choose_files = "选择多个文件";
 		text_choose_folder = "选择文件夹";
+		text_send_files = "发送文件";
 		text_done = "完成";
 		text_create_new = "新建";
 		text_cancel = "取消";
@@ -3376,6 +3379,27 @@ static int callback_browse_download_dir(const int w)
 	return 0; // picker drew itself
 }
 
+static void picker_done_send_files(char **selected)
+{ // PICKER_FILES delivers the chosen file paths. Offer each via file_send to the current chat (or its PM target).
+	if(!selected || global_n < 0)
+		return;
+	const int n = t_peer[global_n].pm_n > -1 ? t_peer[global_n].pm_n : global_n; // PMs go to the GROUP_PEER, otherwise the CTRL/GROUP_CTRL
+	for(size_t j = 0; j < torx_allocation_len(selected) / sizeof(char*); j++)
+		if(selected[j])
+			file_send(n,selected[j]);
+}
+
+static int callback_send_files(const int w)
+{ // Chat Actions: open the multi-file picker, then offer the selection and return to the chat
+	(void)w;
+	pthread_rwlock_rdlock(&mutex_global_variable); // 🟧
+	char *start = torx_copy(download_dir); // NULL → picker defaults to cwd
+	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+	picker_open(PICKER_FILES,start,picker_done_send_files,&draw_chat);
+	torx_free((void*)&start);
+	return 0; // picker drew itself
+}
+
 static int callback_torrc(const int w)
 {
 	(void)w;
@@ -3637,6 +3661,9 @@ static void draw_chat_actions(void)
 	print_wrap(win, &fy, &fx, printable_width, text_identifier, strlen(text_identifier));
 	fy += 1,fx = align_right(torx_utf8len(tmp_rename));
 	widget_text(win,&fy,&fx,1,printable_width,callback_rename,WIDGET_INPUT_SINGLE_LINE,&tmp_rename,&tmp_rename_pos);
+
+	fy += 2, fx = align_right(torx_utf8len(text_send_files));
+	widget_button(win,&fy,&fx,printable_width,callback_send_files,text_send_files);
 
 	const uint8_t owner = getter_uint8(global_n,INT_MIN,-1,offsetof(struct peer_list,owner));
 	if(owner == ENUM_OWNER_GROUP_CTRL)
@@ -4045,6 +4072,68 @@ static int callback_message_group_accept(const int w)
 	return 0; // Do not rebuild
 }
 
+static int file_accept_n = -1, file_accept_f = -1; // staged for picker_done_file_accept (when no download directory is configured)
+
+static void picker_done_file_accept(char **selected)
+{ // PICKER_DIR delivers a destination folder. Build the file path inside it, then accept the inbound file.
+	if(selected && selected[0] && file_accept_n > -1 && file_accept_f > -1)
+	{
+		char *filename = getter_string(file_accept_n,INT_MIN,file_accept_f,offsetof(struct file_list,filename));
+		if(filename)
+		{
+			const size_t l = strlen(selected[0]) + 1 + strlen(filename) + 1;
+			char *full = torx_secure_malloc(l);
+			snprintf(full,l,"%s%c%s",selected[0],platform_slash,filename);
+			file_set_path(file_accept_n,file_accept_f,full);
+			file_accept(file_accept_n,file_accept_f);
+			torx_free((void*)&full);
+		}
+		torx_free((void*)&filename);
+	}
+	file_accept_n = file_accept_f = -1;
+}
+
+static int callback_file_accept(const int w)
+{ // Accept (inbound), start/re-offer (outbound), or pause an active file. file_accept() toggles based on current status.
+	(void)w;
+	int file_n;
+	const int f = set_f_from_i(&file_n,selected_msg_n,selected_msg_i);
+	if(f < 0)
+		return 0; // Do not rebuild
+	const int file_status = file_status_get(file_n,f);
+	if(file_status == ENUM_FILE_INACTIVE_AWAITING_ACCEPTANCE_INBOUND || file_status == ENUM_FILE_INACTIVE_ACCEPTED)
+	{ // Inbound file needs a destination. file_accept uses download_dir if set; otherwise ask the user for a folder.
+		char *file_path = getter_string(file_n,INT_MIN,f,offsetof(struct file_list,file_path));
+		const uint8_t path_exists = file_path ? 1 : 0;
+		torx_free((void*)&file_path);
+		pthread_rwlock_rdlock(&mutex_global_variable); // 🟧
+		const uint8_t dd_exists = download_dir ? 1 : 0;
+		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+		if(!path_exists && !dd_exists)
+		{ // No download directory and no path yet: pick a folder, then accept
+			file_accept_n = file_n;
+			file_accept_f = f;
+			picker_open(PICKER_DIR,NULL,picker_done_file_accept,&draw_chat);
+			return 0; // picker drew itself
+		}
+	}
+	file_accept(file_n,f);
+	go_back(1); // return to chat
+	return 0; // Do not rebuild
+}
+
+static int callback_file_cancel(const int w)
+{ // Reject (inbound) or cancel (outbound) a file transfer
+	(void)w;
+	int file_n;
+	const int f = set_f_from_i(&file_n,selected_msg_n,selected_msg_i);
+	if(f < 0)
+		return 0; // Do not rebuild
+	file_cancel(file_n,f);
+	go_back(1); // return to chat
+	return 0; // Do not rebuild
+}
+
 static void draw_message_actions(void)
 { // Message Actions Route (NOTE: global_n is still set).
 	const int n = selected_msg_n;
@@ -4059,6 +4148,10 @@ static void draw_message_actions(void)
 	const uint8_t utf8 = protocols[p_iter].utf8;
 	const uint16_t protocol = protocols[p_iter].protocol;
 	const uint32_t null_terminated_len = protocols[p_iter].null_terminated_len;
+	const uint8_t file_offer = protocols[p_iter].file_offer;
+	const uint8_t notifiable = protocols[p_iter].notifiable;
+	const uint32_t date_len = protocols[p_iter].date_len;
+	const uint32_t signature_len = protocols[p_iter].signature_len;
 	pthread_rwlock_unlock(&mutex_protocols); // 🟩
 	const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
 	const uint8_t stat = getter_uint8(n,i,-1,offsetof(struct message_list,stat));
@@ -4069,9 +4162,32 @@ static void draw_message_actions(void)
 	print_nowrap(win,&fy,&fx,printable_width,text_actions,strlen(text_actions));
 	wattroff(win,A_BOLD); // bold off
 
+	size_t utf8len;
 	char label[256];
+	if(file_offer && notifiable)
+	{ // File transfer controls: accept/start/pause and reject/cancel (displayable offers only)
+		int file_n;
+		const int f = set_f_from_i(&file_n,n,i);
+		if(f > -1)
+		{
+			const int file_status = file_status_get(file_n,f);
+			if(file_status != ENUM_FILE_INACTIVE_COMPLETE && file_status != ENUM_FILE_INACTIVE_CANCELLED)
+			{ // Accept (inbound) / Start (outbound) / Pause (active), then Reject (inbound) / Cancel (outbound)
+				const char *action = (file_status == ENUM_FILE_ACTIVE_IN || file_status == ENUM_FILE_ACTIVE_OUT || file_status == ENUM_FILE_ACTIVE_IN_OUT) ? text_pause : (stat == ENUM_MESSAGE_RECV ? text_accept : text_start);
+				snprintf(label,sizeof(label),"[ %s ]",action);
+				utf8len = torx_utf8len(label);
+				fy += 1, fx = align_right(utf8len);
+				widget_button(win,&fy,&fx,utf8len,callback_file_accept,label);
+				snprintf(label,sizeof(label),"[ %s ]",stat == ENUM_MESSAGE_RECV ? text_reject : text_cancel);
+				utf8len = torx_utf8len(label);
+				fy += 1, fx = align_right(utf8len);
+				widget_button(win,&fy,&fx,utf8len,callback_file_cancel,label);
+			}
+		}
+	}
+
 	snprintf(label,sizeof(label),"[ %s ]",text_delete);
-	size_t utf8len = torx_utf8len(label);
+	utf8len = torx_utf8len(label);
 	fy += 2, fx = align_right(utf8len);
 	widget_button(win,&fy,&fx,utf8len,callback_message_delete,label);
 
@@ -4083,7 +4199,7 @@ static void draw_message_actions(void)
 		widget_button(win,&fy,&fx,utf8len,callback_message_edit,label);
 	}
 
-	if(stat != ENUM_MESSAGE_RECV)
+	if((date_len && signature_len) || stat != ENUM_MESSAGE_RECV)
 	{
 		snprintf(label,sizeof(label),"[ %s ]",text_resend);
 		utf8len = torx_utf8len(label);
@@ -4158,6 +4274,8 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 	const uint32_t null_terminated_len = protocols[p_iter].null_terminated_len;
 	const uint32_t date_len = protocols[p_iter].date_len;
 	const uint32_t signature_len = protocols[p_iter].signature_len;
+	const uint8_t file_offer = protocols[p_iter].file_offer;
+	const uint8_t notifiable = protocols[p_iter].notifiable;
 	pthread_rwlock_unlock(&mutex_protocols); // 🟩
 	const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
 	const uint8_t stat = getter_uint8(n,i,-1,offsetof(struct message_list,stat));
@@ -4173,7 +4291,7 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 		if(stat == ENUM_MESSAGE_RECV && (t_peer[n].mute || status == ENUM_STATUS_BLOCKED))
 			return lines; // Do not print inbound messages from muted (ignored) or blocked group peers
 	}
-	if((utf8 && null_terminated_len) || protocol == ENUM_PROTOCOL_GROUP_OFFER || protocol == ENUM_PROTOCOL_GROUP_OFFER_FIRST)
+	if((utf8 && null_terminated_len) || protocol == ENUM_PROTOCOL_GROUP_OFFER || protocol == ENUM_PROTOCOL_GROUP_OFFER_FIRST || (file_offer && notifiable))
 	{
 		char *timebuffer = NULL;
 		char *peernick = NULL;
@@ -4232,6 +4350,49 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 			message = torx_secure_malloc(message_len);
 			snprintf(message,message_len,"%s %s: %u %s",g_invite_required ? text_group_private : text_group_public,text_current_members,peercount,g_peernick); // must be same as above
 			torx_free((void*)&g_peernick);
+		}
+		else if(file_offer && notifiable)
+		{ // Render a file offer as: marker filename — progress [(percent)]. Mirrors the GTK4/Flutter clients: file_progress_string yields the size when idle, speed/ETA while transferring, or "Cancelled"; the percentage is appended for every status except awaiting-acceptance and cancelled (where those clients hide the progress bar). Recomputed each redraw so progress updates live. notifiable excludes non-notifiable internals like FILE_OFFER_PARTIAL.
+			int file_n;
+			const int f = set_f_from_i(&file_n,n,i);
+			if(f < 0)
+			{ // File not yet known (e.g. metadata not received); nothing to render
+				torx_free((void*)&timebuffer);
+				torx_free((void*)&peernick);
+				return lines;
+			}
+			char *filename = getter_string(file_n,INT_MIN,f,offsetof(struct file_list,filename));
+			char *progress = file_progress_string(file_n,f); // libtorx helper, as used by the GTK4/Flutter clients
+			const char *p = progress && progress[0] == '\t' ? progress + 1 : progress; // strip the leading tab the helper prefixes to active-transfer output (intended as whitespace in GUI labels)
+			const int file_status = file_status_get(file_n,f);
+			const char *marker; // Terminal-safe glyph indicating the transfer state (avoids emoji that won't render in every terminal): ▼ inbound active, ▲ outbound active, ▼▲ bidirectional, ■ otherwise
+			if(file_status == ENUM_FILE_ACTIVE_IN)
+				marker = "▼";
+			else if(file_status == ENUM_FILE_ACTIVE_OUT)
+				marker = "▲";
+			else if(file_status == ENUM_FILE_ACTIVE_IN_OUT)
+				marker = "▼▲";
+			else // ENUM_FILE_INACTIVE_AWAITING_ACCEPTANCE_INBOUND / ENUM_FILE_INACTIVE_ACCEPTED / ENUM_FILE_INACTIVE_CANCELLED / ENUM_FILE_INACTIVE_COMPLETE
+				marker = "■";
+			if(file_status == ENUM_FILE_INACTIVE_AWAITING_ACCEPTANCE_INBOUND || file_status == ENUM_FILE_INACTIVE_CANCELLED)
+			{ // No percentage (the reference clients hide the progress bar here); file_progress_string already conveys the size or "Cancelled"
+				printable_len = (size_t)snprintf(NULL,0,"%s %s — %s",marker,filename ? filename : "",p ? p : ""); // must be same as below
+				message_len = printable_len + 1;
+				message = torx_secure_malloc(message_len);
+				snprintf(message,message_len,"%s %s — %s",marker,filename ? filename : "",p ? p : ""); // must be same as above
+			}
+			else
+			{ // Append the percentage (100% once complete)
+				const uint64_t size = getter_uint64(file_n,INT_MIN,f,offsetof(struct file_list,size));
+				const uint64_t transferred = calculate_transferred(file_n,f);
+				const unsigned int percent = file_status == ENUM_FILE_INACTIVE_COMPLETE ? 100 : (size ? (unsigned int)(transferred * 100 / size) : 0);
+				printable_len = (size_t)snprintf(NULL,0,"%s %s — %s (%u%%)",marker,filename ? filename : "",p ? p : "",percent); // must be same as below
+				message_len = printable_len + 1;
+				message = torx_secure_malloc(message_len);
+				snprintf(message,message_len,"%s %s — %s (%u%%)",marker,filename ? filename : "",p ? p : "",percent); // must be same as above
+			}
+			torx_free((void*)&filename);
+			torx_free((void*)&progress);
 		}
 		else
 			printable_len = message_len - null_terminated_len - date_len - signature_len;
@@ -4785,35 +4946,47 @@ static int await_key_or_signal(WINDOW *win)
 				{
 					const int n = cb_page->cb_args->mem_int_a;
 					const int i = cb_page->cb_args->mem_int_b;
-					const uint8_t stat = getter_uint8(n,i,-1,offsetof(struct message_list,stat));
-					if(stat == ENUM_MESSAGE_RECV)
-					{ // Currently we re-draw on every keypress, so we only need to redraw here if it is received
-						int group_n = -1;
-						const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-						if(owner == ENUM_OWNER_GROUP_PEER)
+					const int p_iter = getter_int(n,i,-1,offsetof(struct message_list,p_iter));
+					if(p_iter > -1)
+					{
+						pthread_rwlock_rdlock(&mutex_protocols); // 🟧
+						const uint8_t notifiable = protocols[p_iter].notifiable;
+						pthread_rwlock_unlock(&mutex_protocols); // 🟩
+						if(notifiable)
 						{
-							const int g = set_g(n,NULL);
-							group_n = getter_group_int(g,offsetof(struct group_list,n));
-						}
-						if(global_n < 0 || (global_n != n && global_n != group_n))
-						{
-							if(group_n > -1)
-							{
-								t_peer[group_n].unread++;
-								totalUnreadGroup++;
+							const uint8_t stat = getter_uint8(n,i,-1,offsetof(struct message_list,stat));
+							if(stat == ENUM_MESSAGE_RECV)
+							{ // Non-notifiable messages (e.g. FILE_REQUEST/FILE_PAUSE/FILE_CANCEL) are ignored entirely, as in the reference clients
+								int group_n = -1;
+								const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+								if(owner == ENUM_OWNER_GROUP_PEER)
+								{
+									const int g = set_g(n,NULL);
+									group_n = getter_group_int(g,offsetof(struct group_list,n));
+								}
+								if(global_n < 0 || (global_n != n && global_n != group_n))
+								{
+									if(group_n > -1)
+									{
+										t_peer[group_n].unread++;
+										totalUnreadGroup++;
+									}
+									else
+									{
+										t_peer[n].unread++;
+										totalUnreadPeer++;
+									}
+								}
+								if(window_contacts || (global_n > -1 && (global_n == n || global_n == group_n)))
+								{
+									if(window_chat && message_entry_currently_selected)
+										*current_focus = -1; // reset to default, which is message input (yes this is necessary)
+									must_redraw_ui = -2; // better than draw_chat(global_n); // NOT n or this could draw a PM chat
+								}
+								if((window_contacts || must_redraw_ui != -2) && (owner != ENUM_OWNER_GROUP_PEER || t_peer[group_n].mute == 0) && t_peer[n].mute == 0) // NOT else if
+									notify("TODO","ENUM_MESSAGE_NEW"); // Notify if on contact list, or if we're on a chat that isn't the relevant one
 							}
-							else
-							{
-								t_peer[n].unread++;
-								totalUnreadPeer++;
-							}
 						}
-						if(window_chat && message_entry_currently_selected)
-							*current_focus = -1; // reset to default, which is message input (yes this is necessary)
-						if(window_contacts || (global_n > -1 && (global_n == n || global_n == group_n)))
-							must_redraw_ui = -2; // better than draw_chat(global_n); // NOT n or this could draw a PM chat
-						if((window_contacts || must_redraw_ui != -2) && (owner != ENUM_OWNER_GROUP_PEER || t_peer[group_n].mute == 0) && t_peer[n].mute == 0) // NOT else if
-							notify("TODO","ENUM_MESSAGE_NEW"); // Notify if on contact list, or if we're on a chat that isn't the relevant one
 					}
 				}
 				else if(cb_page->cb_type == ENUM_MESSAGE_MODIFIED)
@@ -4821,6 +4994,17 @@ static int await_key_or_signal(WINDOW *win)
 					const int n = cb_page->cb_args->mem_int_a;
 				//	const int i = cb_page->cb_args->mem_int_b;
 					if(n == global_n || (getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner)) == ENUM_OWNER_GROUP_PEER && global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n)))) // TODO could also check if this message is visible, if that is trivial, and verify that we didn't just manually edit this message (which also triggers MESSAGE_MODIFIED).
+						must_redraw_ui = -2;
+				}
+				else if(cb_page->cb_type == ENUM_TRANSFER_PROGRESS)
+				{ // A file transfer progressed. The library throttles these to file_progress_delay (2s) and always fires on completion/stall. Redraw if we are viewing that chat (file progress is only shown there), to update the file offer's progress.
+					const int n = cb_page->cb_args->mem_int_a;
+				//	const int f = cb_page->cb_args->mem_int_b;
+				//	const uint64_t transferred = cb_page->cb_args->mem_uint64;
+					int group_n = -1;
+					if(getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner)) == ENUM_OWNER_GROUP_PEER)
+						group_n = getter_group_int(set_g(n,NULL),offsetof(struct group_list,n));
+					if(window_chat && (global_n == n || global_n == group_n)) // window_chat implies global_n is a valid peer being viewed
 						must_redraw_ui = -2;
 				}
 				else if(cb_page->cb_type == ENUM_MESSAGE_DELETED)
@@ -4987,6 +5171,7 @@ int main(int argc, char **argv)
 
 	option_handler(argc,argv); // must be before initialize_library
 	initialize_library(async_notifier);
+	file_progress_delay = 2000000000; // nanoseconds (2s): the library throttles transfer progress callbacks (ENUM_TRANSFER_PROGRESS) to this interval (full chat redraws are costly), while still firing immediately on completion/stall
 
 	setlocale(LC_ALL, "");
 
