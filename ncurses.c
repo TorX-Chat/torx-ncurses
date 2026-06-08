@@ -1215,6 +1215,18 @@ static int keypress(const int w, const wint_t ch)
 	{
 		if(window_chat && *current_focus == (int)widgets_existing_before_scrollable && (int)(torx_allocation_len(widget) / sizeof(struct widget)) > (int)widgets_existing_before_scrollable + 1)
 			*current_focus = (int)(torx_allocation_len(widget) / sizeof(struct widget)) - 1; // skip to last widget (latest message -> unsent)
+		else if(window_picker)
+		{ // Picker TAB ring: list -> Done -> Cancel -> [Create field -> button] -> list. picker_scroll_offset is never reset here.
+			const int active_widgets = (int)(torx_allocation_len(widget) / sizeof(struct widget)); // Done=0, Cancel=1, then any Create-New widgets, then the file list
+			if(*current_focus >= (int)widgets_existing_before_scrollable)
+				*current_focus = 0; // file list -> Done
+			else if(*current_focus + 1 < (int)widgets_existing_before_scrollable)
+				*current_focus += 1; // NOT ++ // Done -> Cancel -> Create field -> Create button
+			else if(active_widgets > (int)widgets_existing_before_scrollable)
+				*current_focus = (int)widgets_existing_before_scrollable; // last button -> first visible file (scroll preserved)
+			else
+				*current_focus = 0; // empty list: ring among the buttons
+		}
 		else if(current_scroll_offset && *current_focus + 1 == (int)(torx_allocation_len(widget) / sizeof(struct widget)) && more_to_print)
 			*current_scroll_offset += 1; // NOT the same as ++ // At end, need to move down, without current_focus
 		else
@@ -3296,17 +3308,17 @@ static void draw_picker(void)
 	print_nowrap(win,&fy,&fx,printable_width,header,strlen(header));
 	wattroff(win,A_BOLD); // bold off
 
-	// Cancel + Done buttons (top right). Created first so KEY_UP from the first file reaches them (as in draw_chat).
+	// Done + Cancel buttons (top right).
 	char label[256];
 	snprintf(label,sizeof(label),"[ %s ]",text_done);
 	const size_t done_len = torx_utf8len(label);
+	fy = 0,fx = align_right(done_len);
+	widget_button(win,&fy,&fx,done_len,callback_picker_done,label);
+
 	snprintf(label,sizeof(label),"[ %s ]",text_cancel);
 	const size_t cancel_len = torx_utf8len(label);
 	fy = 0,fx = align_right(cancel_len + 1 + done_len);
 	widget_button(win,&fy,&fx,cancel_len,callback_picker_cancel,label);
-	snprintf(label,sizeof(label),"[ %s ]",text_done);
-	fy = 0,fx = align_right(done_len);
-	widget_button(win,&fy,&fx,done_len,callback_picker_done,label);
 
 	if(search)
 	{ // Current search filter, right-aligned just left of the Cancel + Done buttons (mirrors draw_contacts)
