@@ -69,7 +69,7 @@ severable if found in contradiction with the License or applicable law.
 #include <sys/stat.h>	// stat,S_ISDIR,mkdir (file/folder picker)
 #include <beep.h>
 
-#define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.41 2026/04/30 by TorX\n© Copyright 2026 TorX.\n"
+#define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.43 2026/06/10 by TorX\n© Copyright 2026 TorX.\n"
 #define DARK_THEME 0
 #define LIGHT_THEME 1
 #define THEME_DEFAULT DARK_THEME
@@ -1086,6 +1086,7 @@ static void go_back(size_t motions)
 				}
 				global_n = -1;
 				global_group = -1;
+				torx_free((void*)&search);
 			}
 			else if(window_settings)
 			{
@@ -1112,6 +1113,10 @@ static void go_back(size_t motions)
 			}
 			else if(window_logs)
 				torx_free((void*)&tmp_debug_level);
+			else if(window_ids)
+				torx_free((void*)&search);
+			else if(window_requests)
+				torx_free((void*)&search);
 			if(motions < 2)
 				draw_contacts();
 			else // Must prepare prior to destruction
@@ -1128,6 +1133,7 @@ static void go_back(size_t motions)
 		}
 		else if(window_group_invite || window_group_peerlist)
 		{
+			torx_free((void*)&search);
 			if(motions < 2)
 				draw_chat_actions();
 			else // Must prepare prior to destruction
@@ -1184,7 +1190,7 @@ static void go_back(size_t motions)
 			torx_free((void*)&picker_dir);
 			torx_free((void*)&picker_focused_name);
 			torx_free((void*)&picker_newdir);
-			torx_free((void*)&search); // clear the picker's filter so it doesn't leak back into the invoking route's search
+			torx_free((void*)&search);
 			picker_newdir_pos = 0;
 			picker_callback = NULL;
 			void (*ret)(void) = picker_return;
@@ -1445,7 +1451,7 @@ static int keypress(const int w, const wint_t ch)
 			return 1; // Rebuild
 		}
 	}
-	else if(window_contacts || window_ids || window_requests || window_group_invite || window_group_peerlist || window_picker)
+	else if(window_contacts || window_ids || window_requests || window_group_invite || window_group_peerlist || window_picker || window_chat)
 	{ // Handle search entry XXX WARNING: Do not do operations on a widget[w]. There may be no widget. XXX
 		size_t allocation = torx_allocation_len(search);
 		if(ch == KEY_BACKSPACE || ch == 127 || ch == 8)
@@ -2787,7 +2793,7 @@ static int callback_invite(const int w)
 }
 
 static int callback_peer(const int w)
-{
+{ // Open a chat with a peer or group
 	(void)w;
 	global_n = selected_n;
 	const uint8_t owner = getter_uint8(global_n,INT_MIN,-1,offsetof(struct peer_list,owner));
@@ -2797,6 +2803,7 @@ static int callback_peer(const int w)
 		totalUnreadPeer -= t_peer[global_n].unread;
 	t_peer[global_n].unread = 0;
 	chat_scroll_lines = 0;
+	torx_free((void*)&search);
 	draw_chat();
 	return 0; // Do not rebuild
 }
@@ -3685,6 +3692,7 @@ static void draw_global_kill(void)
 static int callback_group_invite(const int w)
 {
 	(void)w;
+	torx_free((void*)&search);
 	draw_group_invite();
 	return 0; // Do not rebuild
 }
@@ -3692,6 +3700,7 @@ static int callback_group_invite(const int w)
 static int callback_group_peerlist(const int w)
 {
 	(void)w;
+	torx_free((void*)&search);
 	draw_group_peerlist();
 	return 0; // Do not rebuild
 }
@@ -3981,6 +3990,7 @@ static int callback_chat_settings(const int w)
 static int callback_requests(const int w)
 {
 	(void)w;
+	torx_free((void*)&search);
 	draw_requests();
 	return 0; // Do not rebuild
 }
@@ -3988,6 +3998,7 @@ static int callback_requests(const int w)
 static int callback_ids(const int w)
 {
 	(void)w;
+	torx_free((void*)&search);
 	draw_ids();
 	return 0; // Do not rebuild
 }
@@ -4342,10 +4353,12 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 			return lines; // Do not print inbound messages from muted (ignored) or blocked group peers
 	}
 	if((utf8 && null_terminated_len) || protocol == ENUM_PROTOCOL_GROUP_OFFER || protocol == ENUM_PROTOCOL_GROUP_OFFER_FIRST || (file_offer && notifiable))
-	{
+	{ // Message is visible
 		char *timebuffer = NULL;
 		char *peernick = NULL;
 		char *message = utf8 && null_terminated_len ? getter_string(n,i,-1,offsetof(struct message_list,message)) : NULL;
+		if(search && (!message || (message && !mit_strcasestr(message,search))))
+			return lines; // When searching, only handle null terminated text
 		size_t peernick_len = 0; // including null byte
 		size_t timebuffer_len = 0; // including null byte
 		size_t message_len = torx_allocation_len(message); // including null byte
@@ -4647,6 +4660,12 @@ static void draw_chat(void)
 	const size_t utf8len2 = torx_utf8len(label);
 	fy = 0,fx = align_right(utf8len1 + 1 + utf8len2);
 	widget_button(win,&fy,&fx,utf8len2,callback_chat_actions,label);
+
+	if(search)
+	{
+		fy = 0,fx = align_right(torx_utf8len(search) + 1 + utf8len1 + 1 + utf8len2);
+		print_nowrap(win,&fy,&fx,subtract_size(screen_cols,fx+2),search,strlen(search));
+	}
 
 	// Get chat history height
 	int min_i,max_i,msg_count,g;
