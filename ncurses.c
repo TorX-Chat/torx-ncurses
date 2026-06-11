@@ -3549,8 +3549,8 @@ static void draw_logs(void)
 		widget_text(win,&fy,&fx,subtract_size(screen_rows,2),inner_width,callback_debug_level,WIDGET_INPUT_NUMERICAL,&tmp_debug_level,&tmp_debug_level_pos);
 		fy += 1;
 	}
-	fx = align_center(inner_width);
-	widget_text(win,&fy,&fx,subtract_size(screen_rows,2),inner_width,NULL,WIDGET_OUTPUT_MULTI_LINE,tor_log_mode ? &tor_log_buffer : &torx_log_buffer,tor_log_mode ? &tor_log_buffer_pos : &torx_log_buffer_pos);
+	fx = align_center(printable_width);
+	widget_text(win,&fy,&fx,subtract_size(screen_rows,2),printable_width,NULL,WIDGET_OUTPUT_MULTI_LINE,tor_log_mode ? &tor_log_buffer : &torx_log_buffer,tor_log_mode ? &tor_log_buffer_pos : &torx_log_buffer_pos);
 	sodium_memzero(label,sizeof(label));
 	widget_draw_cursor(win); // XXX Must do last
 }
@@ -3585,9 +3585,9 @@ static void draw_torrc(void)
 	fx = align_right(utf8len);
 	widget_button(win,&fy,&fx,utf8len,callback_save_torrc,label);
 
-	fx = align_center(inner_width);
+	fx = align_center(printable_width);
 	widget_next_has_default_focus(); // XXX Set default widget focus
-	widget_text(win,&fy,&fx,subtract_size(screen_rows,2),inner_width,NULL,WIDGET_INPUT_MULTI_LINE,&torrc_content_local,&torrc_pos);
+	widget_text(win,&fy,&fx,subtract_size(screen_rows,2),printable_width,NULL,WIDGET_INPUT_MULTI_LINE,&torrc_content_local,&torrc_pos);
 
 	sodium_memzero(label,sizeof(label));
 	widget_draw_cursor(win); // XXX Must do last
