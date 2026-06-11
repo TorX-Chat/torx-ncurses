@@ -279,7 +279,6 @@ static char *tmp_threads_max = NULL;
 static char *tmp_suffix_length = NULL;
 static char *tmp_sing_expiration_days = NULL;
 static char *tmp_mult_expiration_days = NULL;
-static char *tmp_auto_accept_mult = NULL;
 static char *tmp_tor_socks_port = NULL;
 static char *tmp_tor_ctrl_port = NULL;
 static char *tmp_control_password_clear = NULL;
@@ -287,7 +286,6 @@ static size_t tmp_threads_max_pos = 0;
 static size_t tmp_suffix_length_pos = 0;
 static size_t tmp_sing_expiration_days_pos = 0;
 static size_t tmp_mult_expiration_days_pos = 0;
-static size_t tmp_auto_accept_mult_pos = 0;
 static size_t tmp_tor_socks_port_pos = 0;
 static size_t tmp_tor_ctrl_port_pos = 0;
 static size_t tmp_control_password_clear_pos = 0;
@@ -1098,7 +1096,6 @@ static void go_back(size_t motions)
 				torx_free((void*)&tmp_suffix_length);
 				torx_free((void*)&tmp_sing_expiration_days);
 				torx_free((void*)&tmp_mult_expiration_days);
-				torx_free((void*)&tmp_auto_accept_mult);
 				torx_free((void*)&tmp_tor_socks_port);
 				torx_free((void*)&tmp_tor_ctrl_port);
 				torx_free((void*)&tmp_control_password_clear);
@@ -2049,44 +2046,45 @@ static int callback_conjure_location(const int w)
 	return 1; // Rebuild
 }
 
+static inline int apply_global_numeric_setting(const int force_plaintext,void *target,const uint8_t bytes,const char *tmp,const char *setting)
+{ // Shared by the numeric-input settings callbacks: store tmp into global under lock, then persist it
+	pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
+	const long long value = atoll(tmp);
+	if(bytes == 1)
+		*(uint8_t*)target = (uint8_t)value;
+	else if(bytes == 2)
+		*(uint16_t*)target = (uint16_t)value;
+	else if(bytes == 4)
+		*(uint32_t*)target = (uint32_t)value;
+	else
+		*(uint64_t*)target = (uint64_t)value;
+	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+	sql_setting(force_plaintext,-1,setting,tmp,torx_allocation_len(tmp)-1);
+	return 1; // Rebuild
+}
+
 static int callback_threads(const int w)
 {
 	(void)w;
-	pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-	threads_max = (uint32_t)atoll(tmp_threads_max);
-	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-	sql_setting(0,-1,"threads_max",tmp_threads_max,torx_allocation_len(tmp_threads_max)-1);
-	return 1; // Rebuild
+	return apply_global_numeric_setting(0,&threads_max,sizeof(threads_max),tmp_threads_max,"threads_max");
 }
 
 static int callback_suffix(const int w)
 {
 	(void)w;
-	pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-	suffix_length = (uint8_t)atoll(tmp_suffix_length);
-	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-	sql_setting(0,-1,"suffix_length",tmp_suffix_length,torx_allocation_len(tmp_suffix_length)-1);
-	return 1; // Rebuild
+	return apply_global_numeric_setting(0,&suffix_length,sizeof(suffix_length),tmp_suffix_length,"suffix_length");
 }
 
 static int callback_sing_days(const int w)
 {
 	(void)w;
-	pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-	sing_expiration_days = (uint32_t)atoll(tmp_sing_expiration_days);
-	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-	sql_setting(0,-1,"sing_expiration_days",tmp_sing_expiration_days,torx_allocation_len(tmp_sing_expiration_days)-1);
-	return 1; // Rebuild
+	return apply_global_numeric_setting(0,&sing_expiration_days,sizeof(sing_expiration_days),tmp_sing_expiration_days,"sing_expiration_days");
 }
 
-static int callback_mult_dats(const int w)
+static int callback_mult_days(const int w)
 {
 	(void)w;
-	pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-	mult_expiration_days = (uint32_t)atoll(tmp_mult_expiration_days);
-	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-	sql_setting(0,-1,"mult_expiration_days",tmp_mult_expiration_days,torx_allocation_len(tmp_mult_expiration_days)-1);
-	return 1; // Rebuild
+	return apply_global_numeric_setting(0,&mult_expiration_days,sizeof(mult_expiration_days),tmp_mult_expiration_days,"mult_expiration_days");
 }
 
 static int callback_auto_mult(const int w)
@@ -2103,21 +2101,13 @@ static int callback_auto_mult(const int w)
 static int callback_socks_port(const int w)
 {
 	(void)w;
-	pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-	tor_socks_port = (uint16_t)atoll(tmp_tor_socks_port);
-	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-	sql_setting(0,-1,"tor_socks_port",tmp_tor_socks_port,torx_allocation_len(tmp_tor_socks_port)-1);
-	return 1; // Rebuild
+	return apply_global_numeric_setting(0,&tor_socks_port,sizeof(tor_socks_port),tmp_tor_socks_port,"tor_socks_port");
 }
 
 static int callback_ctrl_port(const int w)
 {
 	(void)w;
-	pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-	tor_ctrl_port = (uint16_t)atoll(tmp_tor_ctrl_port);
-	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-	sql_setting(0,-1,"tor_ctrl_port",tmp_tor_ctrl_port,torx_allocation_len(tmp_tor_ctrl_port)-1);
-	return 1; // Rebuild
+	return apply_global_numeric_setting(0,&tor_ctrl_port,sizeof(tor_ctrl_port),tmp_tor_ctrl_port,"tor_ctrl_port");
 }
 
 static int callback_ctrl_pass(const int w)
@@ -2440,7 +2430,7 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			*fyp += 2, *fxp = 2;
 			print_wrap(win, fyp, fxp, printable_width, text_set_validity_mult, strlen(text_set_validity_mult));
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_mult_expiration_days));
-			widget_text(win,fyp,fxp,1,printable_width,callback_mult_dats,WIDGET_INPUT_NUMERICAL,&tmp_mult_expiration_days,&tmp_mult_expiration_days_pos);
+			widget_text(win,fyp,fxp,1,printable_width,callback_mult_days,WIDGET_INPUT_NUMERICAL,&tmp_mult_expiration_days,&tmp_mult_expiration_days_pos);
 		}
 		else if(item_to_draw == 12)
 		{ // Automatically Accept Incoming Mult Requests
@@ -3851,7 +3841,6 @@ static int callback_settings(const int w)
 	tmp_suffix_length = torx_itoa(suffix_length);
 	tmp_sing_expiration_days = torx_itoa(sing_expiration_days);
 	tmp_mult_expiration_days = torx_itoa(mult_expiration_days);
-	tmp_auto_accept_mult = torx_itoa(auto_accept_mult);
 	tmp_tor_socks_port = torx_itoa(tor_socks_port);
 	tmp_tor_ctrl_port = torx_itoa(tor_ctrl_port);
 	tmp_control_password_clear = torx_copy(control_password_clear);
@@ -3861,7 +3850,6 @@ static int callback_settings(const int w)
 	tmp_suffix_length_pos = torx_allocation_len(tmp_suffix_length) - 1;
 	tmp_sing_expiration_days_pos = torx_allocation_len(tmp_sing_expiration_days) - 1;
 	tmp_mult_expiration_days_pos = torx_allocation_len(tmp_mult_expiration_days) - 1;
-	tmp_auto_accept_mult_pos = torx_allocation_len(tmp_auto_accept_mult) - 1;
 	tmp_tor_socks_port_pos = torx_allocation_len(tmp_tor_socks_port) - 1;
 	tmp_tor_ctrl_port_pos = torx_allocation_len(tmp_tor_ctrl_port) - 1;
 	tmp_control_password_clear_pos = tmp_control_password_clear ? torx_allocation_len(tmp_control_password_clear) - 1 : 0;
