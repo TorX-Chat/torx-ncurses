@@ -4345,7 +4345,7 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 		char *timebuffer = NULL;
 		char *peernick = NULL;
 		char *message = utf8 && null_terminated_len ? getter_string(n,i,-1,offsetof(struct message_list,message)) : NULL;
-		if(search && (!message || (message && !mit_strcasestr(message,search))))
+		if(search && (!message || !mit_strcasestr(message,search)))
 			return lines; // When searching, only handle null terminated text
 		size_t peernick_len = 0; // including null byte
 		size_t timebuffer_len = 0; // including null byte
