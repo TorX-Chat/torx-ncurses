@@ -83,7 +83,7 @@ if(TORX_INCLUDE_DIR AND torx)
 	message(STATUS "TorX library found; NOT building.") # TODO maybe verify that it is appropriately shared / static if BUILD_SHARED_LIBS was passed?
 else()
 	message(STATUS "TorX library NOT found; Building.")
-#	set(NO_QR_GENERATOR 1) # Need this for write_bytes
+#	set(NO_QR_GENERATOR 1)
 	set(NO_AUDIO_CALL 1)
 	set(NO_STICKERS 1)
 #	set(NO_FILE_TRANSFER 1)

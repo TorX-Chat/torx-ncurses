@@ -67,6 +67,7 @@ severable if found in contradiction with the License or applicable law.
 #include <fcntl.h>	// related to pipe
 #include <dirent.h>	// opendir,readdir,closedir (file/folder picker)
 #include <sys/stat.h>	// stat,S_ISDIR,mkdir (file/folder picker)
+#include <time.h>	// time (UTC epoch seconds, for QR filenames)
 #include <beep.h>
 
 #define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.43 2026/06/10 by TorX\n© Copyright 2026 TorX.\n"
@@ -149,6 +150,9 @@ static int callback_browse_snowflake_location(const int w);
 static int callback_browse_lyrebird_location(const int w);
 static int callback_browse_conjure_location(const int w);
 static int callback_browse_download_dir(const int w);
+static int callback_save_qr_chat_actions(const int w);
+static int callback_save_qr_id(const int w);
+static int callback_save_qr_generate(const int w);
 void async_notifier(void);
 
 enum {
@@ -330,6 +334,7 @@ static void (*picker_callback)(char **selected) = NULL; // invoked with the resu
 static void (*picker_return)(void) = NULL; // route to redraw once the picker closes
 static char **picker_location_target = NULL; // binary-location button: which tmp_*_location to write (e.g. &tmp_tor_location)
 static int (*picker_location_apply)(const int) = NULL; // binary-location button: apply callback to invoke (e.g. callback_tor_location)
+static int picker_qr_n = -1; // Save QR button: peer/group whose QR to write once a directory is chosen
 
 /* Scrollable state */
 static uint8_t more_to_print = 0;
@@ -2255,6 +2260,7 @@ static int callback_generate_one(const int w)
 		const size_t len = strlen(text_successfully_created_group);
 		generate_output = torx_insecure_malloc(len+1);
 		snprintf(generate_output,len+1,"%s",text_successfully_created_group);
+		generated_n = -1; // invite-only groups have no shareable GroupID QR; clear any stale value so no Save QR button appears
 		return 1; // Rebuild
 	}
 	return 0; // Do not rebuild
@@ -2278,6 +2284,7 @@ static int callback_generate_two(const int w)
 		pthread_rwlock_unlock(&mutex_expand_group); // 🟩
 		generate_output = b64_encode(id,GROUP_ID_SIZE);
 		sodium_memzero(id,sizeof(id));
+		generated_n = getter_group_int(g,offsetof(struct group_list,n)); // so the Save QR button (GroupID) appears, mirroring the SING/MULT path
 		return 1; // Rebuild
 	}
 	return 0; // Do not rebuild
@@ -2503,7 +2510,15 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 				widget_button(win,fyp,fxp,printable_width,callback_peer_accept,text_accept);
 			}
 		}
-		else if(item_to_draw == 2)
+		else if(item_to_draw == 2 && window_ids_popover)
+		{ // Save QR (TorX-ID), IDs popover only; Delete follows as the last item
+			char label[256];
+			snprintf(label,sizeof(label),"[ %s ]",text_save_qr);
+			*fyp += 2, *fxp = align_right(torx_utf8len(label));
+			widget_button(win,fyp,fxp,printable_width,callback_save_qr_id,label);
+			sodium_memzero(label,sizeof(label));
+		}
+		else if((item_to_draw == 2 && window_requests_popover) || (item_to_draw == 3 && window_ids_popover))
 		{
 			char label[256];
 			snprintf(label,sizeof(label),"[ %s ]",window_requests_popover && !outgoing_mode ? text_reject : text_delete);
@@ -2639,6 +2654,13 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			{
 				*fyp += 2, *fxp = align_center(torx_utf8len(generate_output));
 				print_wrap(win,fyp,fxp,printable_width,generate_output,torx_allocation_len(generate_output) - 1);
+				if(generated_n > -1)
+				{ // Save QR below the generated TorX-ID / GroupID (peers and public groups alike)
+					snprintf(label,sizeof(label),"[ %s ]",text_save_qr);
+					const size_t qr_len = torx_utf8len(label);
+					*fyp += 2,*fxp = align_center(qr_len);
+					widget_button(win,fyp,fxp,qr_len,callback_save_qr_generate,label);
+				}
 			}
 			sodium_memzero(label,sizeof(label));
 			return 0; // Printed last (XXX IMPORTANT: sets more_to_print XXX)
@@ -2690,18 +2712,18 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 		else if(item_to_draw == 3)
 		{
 			*fyp += 2, *fxp = 2;
-			widget_button(win,fyp,fxp,printable_width,callback_chat_kill,text_tooltip_button_kill);
+			widget_button(win,fyp,fxp,printable_width,callback_chat_delete,text_tooltip_button_delete);
 		}
 		else if(item_to_draw == 4)
 		{
 			*fyp += 2, *fxp = 2;
-			widget_button(win,fyp,fxp,printable_width,callback_chat_delete,text_tooltip_button_delete);
-		}
-		else if(item_to_draw == 5)
-		{
-			*fyp += 2, *fxp = 2;
 			widget_button(win,fyp,fxp,printable_width,callback_chat_clear,text_tooltip_button_delete_log);
 			return 0; // Printed last (XXX IMPORTANT: sets more_to_print XXX)
+		}
+		else if(item_to_draw == 5 && getter_uint8(global_n,INT_MIN,-1,offsetof(struct peer_list,owner) != ENUM_OWNER_GROUP_CTRL))
+		{
+			*fyp += 2, *fxp = 2;
+			widget_button(win,fyp,fxp,printable_width,callback_chat_kill,text_tooltip_button_kill);
 		}
 		else
 			return 0; // Printed nothing
@@ -3447,6 +3469,77 @@ static int callback_send_files(const int w)
 	return 0; // picker drew itself
 }
 
+static void picker_done_save_qr(char **selected)
+{ // PICKER_DIR delivers the chosen directory. Generate a PNG QR for picker_qr_n and write it as qr<UTC>.png inside it (mirrors ui_save_qr_to_file in torx-gtk4).
+	if(!selected || !selected[0] || picker_qr_n < 0)
+		return;
+	const int n = picker_qr_n;
+	struct qr_data *qr_data;
+	const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+	if(owner == ENUM_OWNER_GROUP_CTRL)
+	{ // GroupID (public group) as QR
+		const int g = set_g(n,NULL); // just looking up existing
+		unsigned char id[GROUP_ID_SIZE]; // zero'd
+		pthread_rwlock_rdlock(&mutex_expand_group); // 🟧
+		memcpy(id,group[g].id,sizeof(id));
+		pthread_rwlock_unlock(&mutex_expand_group); // 🟩
+		char *group_id_encoded = b64_encode(id,GROUP_ID_SIZE);
+		sodium_memzero(id,sizeof(id));
+		qr_data = qr_bool(group_id_encoded,8);
+		torx_free((void*)&group_id_encoded);
+	}
+	else
+	{ // TorX-ID as QR
+		char torxid[52+1]; // zero'd
+		getter_array(&torxid,sizeof(torxid),n,INT_MIN,-1,offsetof(struct peer_list,torxid));
+		qr_data = qr_bool(torxid,8);
+		sodium_memzero(torxid,sizeof(torxid));
+	}
+	void *png_data = return_png(qr_data);
+	const size_t png_size = torx_allocation_len(png_data);
+	const size_t dir_len = strlen(selected[0]);
+	char file_path[dir_len + 32]; // dir + slash + "qr<UTC>.png" + null
+	snprintf(file_path,sizeof(file_path),"%s%cqr%lld.png",selected[0],platform_slash,(long long)time(NULL));
+	write_bytes(file_path,png_data,png_size);
+	sodium_memzero(file_path,sizeof(file_path));
+	torx_free((void*)&png_data);
+	torx_free((void*)&qr_data->data);
+	torx_free((void*)&qr_data);
+}
+
+static int callback_save_qr(const int n,void (*return_route)(void))
+{ // Shared by the four Save QR buttons: open a PICKER_DIR rooted at the download directory, then write the QR there
+	if(n < 0)
+	{
+		beep(); // nothing generated yet / no valid peer
+		return 0; // Nothing changed; do not rebuild
+	}
+	picker_qr_n = n;
+	pthread_rwlock_rdlock(&mutex_global_variable); // 🟧
+	char *start = torx_copy(download_dir); // NULL → picker defaults to cwd
+	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
+	picker_open(PICKER_DIR,start,picker_done_save_qr,return_route);
+	torx_free((void*)&start);
+	return 0; // picker drew itself
+}
+
+static int callback_save_qr_chat_actions(const int w)
+{
+	(void)w;
+	return callback_save_qr(global_n,&draw_chat_actions);
+}
+
+static int callback_save_qr_id(const int w)
+{
+	(void)w;
+	return callback_save_qr(treeview_n,&draw_ids_popover);
+}
+static int callback_save_qr_generate(const int w)
+{
+	(void)w;
+	return callback_save_qr(generated_n,&draw_generate);
+}
+
 static int callback_torrc(const int w)
 {
 	(void)w;
@@ -3739,6 +3832,8 @@ static void draw_chat_actions(void)
 			print_wrap(win, &fy, &fx, printable_width, group_id_encoded, torx_allocation_len(group_id_encoded)-1);
 			sodium_memzero(id,sizeof(id));
 			torx_free((void*)&group_id_encoded);
+			fy += 2, fx = align_right(torx_utf8len(text_save_qr));
+			widget_button(win,&fy,&fx,printable_width,callback_save_qr_chat_actions,text_save_qr);
 		}
 	}
 
