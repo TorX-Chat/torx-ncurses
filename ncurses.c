@@ -1460,7 +1460,7 @@ static int keypress(const int w, const wint_t ch)
 				search[allocation-1] = '\0';
 				if(window_picker)
 					picker_scroll_offset = 0,focus_picker = -1; // filter changed; keep scroll/focus valid against the (now larger) list
-				return 1;
+				return 1; // Rebuild
 			}
 		}
 		else
@@ -1482,7 +1482,7 @@ static int keypress(const int w, const wint_t ch)
 			sodium_memzero(buff,sizeof(buff));
 			if(window_picker)
 				picker_scroll_offset = 0,focus_picker = -1; // filter changed; keep scroll/focus valid against the (now smaller) list
-			return 1;
+			return 1; // Rebuild
 		}
 		beep();
 	}
@@ -4871,6 +4871,13 @@ static int await_key_or_signal(WINDOW *win)
 				else if(cb_page->cb_type == ENUM_ONION_DELETED)
 				{ // TODO should go_back in the case of global_n (ie receiving kill code), or we could have draw_chat and popovers trigger a go_back if the peer is deleted.
 					const int n = cb_page->cb_args->mem_int_a;
+					torx_free((void*)&t_peer[n].unsent);
+					t_peer[n].unsent_pos = 0;
+					t_peer[n].unread = 0;
+					t_peer[n].pm_n = -1;
+					t_peer[n].edit_n = -1;
+					t_peer[n].edit_i = INT_MIN;
+					t_peer[n].mute = 0; // 0 no, 1 yes
 					if(n == generated_n)
 					{
 						torx_free((void*)&generate_output);
