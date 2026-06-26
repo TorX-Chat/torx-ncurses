@@ -70,7 +70,7 @@ severable if found in contradiction with the License or applicable law.
 #include <time.h>	// time (UTC epoch seconds, for QR filenames)
 #include <beep.h>
 
-#define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.43 2026/06/10 by TorX\n© Copyright 2026 TorX.\n"
+#define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.44 2026/06/25 by TorX\n© Copyright 2026 TorX.\n"
 #define DARK_THEME 0
 #define LIGHT_THEME 1
 #define THEME_DEFAULT DARK_THEME

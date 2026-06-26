@@ -112,7 +112,7 @@ target_link_libraries(
 		Winmm		## For Wave audio output
 		${NCURSESW_LIBRARIES}
 		torx
-		png
+		z
 		sodium
 	##	event
 		event_core
@@ -126,7 +126,7 @@ target_link_libraries(
 	${PROJECT_NAME} PRIVATE
 		${NCURSESW_LIBRARIES}
 		torx
-		png		## TODO required ONLY when BUILD_SHARED_LIBS=0
+		z		## TODO required ONLY when BUILD_SHARED_LIBS=0
 		sodium		## TODO required ALWAYS for sodium_memzero
 	##	event
 		event_core	## TODO required ALWAYS for evutil_closesocket (and probably things like evutil_socket_t)
