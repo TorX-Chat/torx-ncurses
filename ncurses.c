@@ -70,7 +70,7 @@ severable if found in contradiction with the License or applicable law.
 #include <time.h>	// time (UTC epoch seconds, for QR filenames)
 #include <beep.h>
 
-#define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.44 2026/06/25 by TorX\n© Copyright 2026 TorX.\n"
+#define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.45 2026/07/01 by TorX\n© Copyright 2026 TorX.\n"
 #define DARK_THEME 0
 #define LIGHT_THEME 1
 #define THEME_DEFAULT DARK_THEME
@@ -146,7 +146,6 @@ static void draw_picker(void);
 static int await_key_or_signal(WINDOW *win);
 static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_t *scroll_offset);
 static int callback_browse_tor_location(const int w);
-static int callback_browse_snowflake_location(const int w);
 static int callback_browse_lyrebird_location(const int w);
 static int callback_browse_conjure_location(const int w);
 static int callback_browse_download_dir(const int w);
@@ -275,7 +274,6 @@ static size_t tmp_rename_pos = 0; // Note: also utilized elsewhere
 
 /* Settings state */
 static size_t settings_scroll_offset = 0;
-static char *tmp_snowflake_location = NULL;
 static char *tmp_lyrebird_location = NULL;
 static char *tmp_conjure_location = NULL;
 static char *tmp_tor_location = NULL;
@@ -491,7 +489,6 @@ static const char *text_set_auto_resume_inbound = {0};
 static const char *text_set_stickers_save_all = {0};
 static const char *text_set_download_directory = {0};
 static const char *text_tor = {0};
-static const char *text_snowflake = {0};
 static const char *text_lyrebird = {0};
 static const char *text_conjure = {0};
 static const char *text_binary_location = {0};
@@ -1093,7 +1090,6 @@ static void go_back(size_t motions)
 			}
 			else if(window_settings)
 			{
-				torx_free((void*)&tmp_snowflake_location);
 				torx_free((void*)&tmp_lyrebird_location);
 				torx_free((void*)&tmp_conjure_location);
 				torx_free((void*)&tmp_tor_location);
@@ -1678,7 +1674,6 @@ static void ui_initialize_language(void)
 		text_set_stickers_save_all = "Save All Stickers";
 		text_set_download_directory = "Select Download Directory";
 		text_tor = "Tor"; // part B
-		text_snowflake = "Snowflake"; // part B
 		text_lyrebird = "Lyrebird"; // part B
 		text_conjure = "Conjure"; // part B
 		text_binary_location = "binary location (effective immediately)"; // part C
@@ -1887,7 +1882,6 @@ after each comes online and receives the code.";
 		text_set_download_directory = "选择下载目录";
 		//text_set_tor = "选择自定义Tor二进制文件路径（立即生效）";
 		text_tor = "Tor"; // part B
-		text_snowflake = "Snowflake"; // part B
 		text_lyrebird = "Lyrebird"; // part B
 		text_conjure = "Conjure"; // part B
 		text_binary_location = "二进制地址(即刻生效)"; // part C
@@ -1993,23 +1987,6 @@ static int callback_tor_location(const int w)
 		tor_location = torx_copy(tmp_tor_location);
 		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
 		sql_setting(1,-1,"tor_location",tmp_tor_location,torx_allocation_len(tmp_tor_location)-1);
-		start_tor();
-	}
-	else
-		return 0; // Do not rebuild
-	return 1; // Rebuild
-}
-
-static int callback_snowflake_location(const int w)
-{
-	(void)w;
-	if(tmp_snowflake_location)
-	{
-		pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-		torx_free((void*)&snowflake_location);
-		snowflake_location = torx_copy(tmp_snowflake_location);
-		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
-		sql_setting(1,-1,"snowflake_location",tmp_snowflake_location,torx_allocation_len(tmp_snowflake_location)-1);
 		start_tor();
 	}
 	else
@@ -2382,16 +2359,6 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			sodium_memzero(label_text,len);
 		}
 		else if(item_to_draw == 5)
-		{ // Select Snowflake binary location (effective immediately)
-			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_snowflake,text_binary_location);
-			*fyp += 2, *fxp = 2;
-			print_wrap(win, fyp, fxp, printable_width, label_text, len);
-			const char *loc = (tmp_snowflake_location && *tmp_snowflake_location) ? tmp_snowflake_location : text_choose_file; // placeholder keeps the button visible/focusable when unset
-			*fyp += 1,*fxp = align_right(torx_utf8len(loc));
-			widget_button(win,fyp,fxp,printable_width,callback_browse_snowflake_location,loc);
-			sodium_memzero(label_text,len);
-		}
-		else if(item_to_draw == 6)
 		{ // Select Lyrebird binary location (effective immediately)
 			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_lyrebird,text_binary_location);
 			*fyp += 2, *fxp = 2;
@@ -2401,7 +2368,7 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			widget_button(win,fyp,fxp,printable_width,callback_browse_lyrebird_location,loc);
 			sodium_memzero(label_text,len);
 		}
-		else if(item_to_draw == 7)
+		else if(item_to_draw == 6)
 		{ // Select Conjure binary location (effective immediately)
 			const size_t len = (size_t)snprintf(label_text,sizeof(label_text),"%s %s %s",text_select,text_conjure,text_binary_location);
 			*fyp += 2, *fxp = 2;
@@ -2411,35 +2378,35 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			widget_button(win,fyp,fxp,printable_width,callback_browse_conjure_location,loc);
 			sodium_memzero(label_text,len);
 		}
-		else if(item_to_draw == 8)
+		else if(item_to_draw == 7)
 		{ // Maximum CPU threads for TorX-ID generation
 			*fyp += 2, *fxp = 2;
 			print_wrap(win, fyp, fxp, printable_width, text_set_cpu, strlen(text_set_cpu));
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_threads_max));
 			widget_text(win,fyp,fxp,1,printable_width,callback_threads,WIDGET_INPUT_NUMERICAL,&tmp_threads_max,&tmp_threads_max_pos);
 		}
-		else if(item_to_draw == 9)
+		else if(item_to_draw == 8)
 		{ // Minimum Suffix Length for TorX-ID generation
 			*fyp += 2, *fxp = 2;
 			print_wrap(win, fyp, fxp, printable_width, text_set_suffix, strlen(text_set_suffix));
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_suffix_length));
 			widget_text(win,fyp,fxp,1,printable_width,callback_suffix,WIDGET_INPUT_NUMERICAL,&tmp_suffix_length,&tmp_suffix_length_pos);
 		}
-		else if(item_to_draw == 10)
+		else if(item_to_draw == 9)
 		{ // Single-Use TorX-ID expiration time (days)
 			*fyp += 2, *fxp = 2;
 			print_wrap(win, fyp, fxp, printable_width, text_set_validity_sing, strlen(text_set_validity_sing));
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_sing_expiration_days));
 			widget_text(win,fyp,fxp,1,printable_width,callback_sing_days,WIDGET_INPUT_NUMERICAL,&tmp_sing_expiration_days,&tmp_sing_expiration_days_pos);
 		}
-		else if(item_to_draw == 11)
+		else if(item_to_draw == 10)
 		{ // Multiple-Use TorX-ID expiration time (days)
 			*fyp += 2, *fxp = 2;
 			print_wrap(win, fyp, fxp, printable_width, text_set_validity_mult, strlen(text_set_validity_mult));
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_mult_expiration_days));
 			widget_text(win,fyp,fxp,1,printable_width,callback_mult_days,WIDGET_INPUT_NUMERICAL,&tmp_mult_expiration_days,&tmp_mult_expiration_days_pos);
 		}
-		else if(item_to_draw == 12)
+		else if(item_to_draw == 11)
 		{ // Automatically Accept Incoming Mult Requests
 			if(threadsafe_read_uint8(&mutex_global_variable,&auto_accept_mult))
 				selected = text_enable;
@@ -2450,28 +2417,28 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			*fyp += 1,*fxp = align_right(torx_utf8len(selected));
 			widget_button(win,fyp,fxp,printable_width,callback_auto_mult,selected);
 		}
-		else if(item_to_draw == 13)
+		else if(item_to_draw == 12)
 		{ // Tor SOCKS5 Port
 			*fyp += 2, *fxp = 2;
 			print_wrap(win, fyp, fxp, printable_width, text_set_tor_port_socks, strlen(text_set_tor_port_socks));
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_tor_socks_port));
 			widget_text(win,fyp,fxp,1,printable_width,callback_socks_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_socks_port,&tmp_tor_socks_port_pos);
 		}
-		else if(item_to_draw == 14)
+		else if(item_to_draw == 13)
 		{ // Tor Control Port
 			*fyp += 2, *fxp = 2;
 			print_wrap(win, fyp, fxp, printable_width, text_set_tor_port_ctrl, strlen(text_set_tor_port_ctrl));
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_tor_ctrl_port));
 			widget_text(win,fyp,fxp,1,printable_width,callback_ctrl_port,WIDGET_INPUT_NUMERICAL,&tmp_tor_ctrl_port,&tmp_tor_ctrl_port_pos);
 		}
-		else if(item_to_draw == 15)
+		else if(item_to_draw == 14)
 		{ // Tor Control Password
 			*fyp += 2, *fxp = 2;
 			print_wrap(win, fyp, fxp, printable_width, text_set_tor_password, strlen(text_set_tor_password));
 			*fyp += 1,*fxp = align_right(torx_utf8len(tmp_control_password_clear));
 			widget_text(win,fyp,fxp,1,printable_width,callback_ctrl_pass,WIDGET_INPUT_SINGLE_LINE,&tmp_control_password_clear,&tmp_control_password_clear_pos);
 		}
-		else if(item_to_draw == 16)
+		else if(item_to_draw == 15)
 		{ // Select Download Directory. The path itself is the button; ENTER opens the directory picker.
 			*fyp += 2, *fxp = 2;
 			print_wrap(win, fyp, fxp, printable_width, text_set_download_directory, strlen(text_set_download_directory));
@@ -2544,7 +2511,7 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			*fyp += 2,*fxp = 4;
 			widget_checkbox(win,fyp,fxp,subtract_size(screen_cols,*fxp*2),callback_pw_show,1,text_show_password,pw_show);
 		}
-		else if(item_to_draw == 2)
+		else if(item_to_draw == 2 && lyrebird_location)
 		{
 			*fyp += 1, *fxp = 4;
 			widget_checkbox(win,fyp,fxp,subtract_size(screen_cols,*fxp*2),callback_censored_region,1,text_censored_region,threadsafe_read_uint8(&mutex_global_variable,&censored_region));
@@ -3418,10 +3385,24 @@ static int callback_browse_location(char **target,int (*apply)(const int))
 	return 0; // picker drew itself
 }
 
-static int callback_browse_tor_location(const int w){ (void)w; return callback_browse_location(&tmp_tor_location,callback_tor_location); }
-static int callback_browse_snowflake_location(const int w){ (void)w; return callback_browse_location(&tmp_snowflake_location,callback_snowflake_location); }
-static int callback_browse_lyrebird_location(const int w){ (void)w; return callback_browse_location(&tmp_lyrebird_location,callback_lyrebird_location); }
-static int callback_browse_conjure_location(const int w){ (void)w; return callback_browse_location(&tmp_conjure_location,callback_conjure_location); }
+static int callback_browse_tor_location(const int w)
+{
+	(void)w;
+	return callback_browse_location(&tmp_tor_location,callback_tor_location);
+
+}
+
+static int callback_browse_lyrebird_location(const int w)
+{
+	(void)w;
+	return callback_browse_location(&tmp_lyrebird_location,callback_lyrebird_location);
+}
+
+static int callback_browse_conjure_location(const int w)
+{
+	(void)w;
+	return callback_browse_location(&tmp_conjure_location,callback_conjure_location);
+}
 
 static void picker_done_download_dir(char **selected)
 { // PICKER_DIR delivers the chosen directory. Sets the libtorx global under mutex and persists it (plaintext setting, matching the loader).
@@ -3928,7 +3909,6 @@ static int callback_settings(const int w)
 {
 	(void)w;
 	pthread_rwlock_rdlock(&mutex_global_variable); // 🟧
-	tmp_snowflake_location = torx_copy(snowflake_location);
 	tmp_lyrebird_location = torx_copy(lyrebird_location);
 	tmp_conjure_location = torx_copy(conjure_location);
 	tmp_tor_location = torx_copy(tor_location);

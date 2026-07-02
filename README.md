@@ -11,8 +11,8 @@ This page is primarily for developers and contributors.
 ###### Install build dependencies:
 `sudo apt install git cmake xxd libsodium-dev libevent-dev libsqlcipher-dev build-essential libncurses-dev`
 
-###### Install runtime dependencies:
-`sudo apt install tor snowflake-client obfs4proxy`
+###### Install runtime dependencies (lyrebird is an optional transport):
+`sudo apt install tor lyrebird`
 
 ###### Clone the repository
 `git clone https://github.com/TorX-Chat/torx-ncurses && cd torx-ncurses`
