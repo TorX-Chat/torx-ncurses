@@ -1441,6 +1441,8 @@ static int keypress(const int w, const wint_t ch)
 	{ // Applicable to text widgets only. Captures space but NOT enter.
 		if(widget[w].type == WIDGET_INPUT_NUMERICAL && (ch < '0' || ch > '9'))
 			beep(); // do nothing, ignore invalid entry
+		else if(widget[w].type != WIDGET_INPUT_MULTI_LINE && (ch == L'\n' || ch == KEY_ENTER || ch == L'\r'))
+			return keypress(w,KEY_BTAB);  // Handle enter-press in the event of there being no callback registered // recursive
 		else
 		{
 			if(window_chat && message_entry_currently_selected)
