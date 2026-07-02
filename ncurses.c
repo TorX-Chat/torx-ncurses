@@ -2204,8 +2204,7 @@ static int callback_chat_kill(const int w)
 {
 	(void)w;
 	kill_code(global_n,NULL);
-	go_back(2);
-	return 0; // Do not rebuild
+	return 0; // Do not rebuild; navigation is handled by ENUM_ONION_DELETED once the peer is actually deleted (after the kill code sends), matching gtk4/flutter
 }
 
 static int callback_chat_delete(const int w)
@@ -2213,8 +2212,7 @@ static int callback_chat_delete(const int w)
 	(void)w;
 	const int peer_index = getter_int(global_n,INT_MIN,-1,offsetof(struct peer_list,peer_index));
 	takedown_onion(peer_index,1);
-	go_back(2);
-	return 0; // Do not rebuild
+	return 0; // Do not rebuild; navigation is handled by ENUM_ONION_DELETED, matching gtk4/flutter
 }
 
 static int callback_chat_clear(const int w)
@@ -2512,6 +2510,8 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 		{
 			*fyp += 2,*fxp = 4;
 			widget_checkbox(win,fyp,fxp,subtract_size(screen_cols,*fxp*2),callback_pw_show,1,text_show_password,pw_show);
+			if(!lyrebird_location)
+				return 0; // Printed last (XXX IMPORTANT: sets more_to_print XXX) -- item 2 (censored region) only draws when lyrebird_location is known, so item 1 is last otherwise
 		}
 		else if(item_to_draw == 2 && lyrebird_location)
 		{
@@ -2687,12 +2687,14 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 		{
 			*fyp += 2, *fxp = 2;
 			widget_button(win,fyp,fxp,printable_width,callback_chat_clear,text_tooltip_button_delete_log);
-			return 0; // Printed last (XXX IMPORTANT: sets more_to_print XXX)
+			if(getter_uint8(global_n,INT_MIN,-1,offsetof(struct peer_list,owner)) == ENUM_OWNER_GROUP_CTRL)
+				return 0; // Printed last (XXX IMPORTANT: sets more_to_print XXX) -- group ctrls have no kill button (item 5), so item 4 is last for them
 		}
-		else if(item_to_draw == 5 && getter_uint8(global_n,INT_MIN,-1,offsetof(struct peer_list,owner) != ENUM_OWNER_GROUP_CTRL))
+		else if(item_to_draw == 5 && getter_uint8(global_n,INT_MIN,-1,offsetof(struct peer_list,owner)) != ENUM_OWNER_GROUP_CTRL)
 		{
 			*fyp += 2, *fxp = 2;
 			widget_button(win,fyp,fxp,printable_width,callback_chat_kill,text_tooltip_button_kill);
+			return 0; // Printed last (XXX IMPORTANT: sets more_to_print XXX)
 		}
 		else
 			return 0; // Printed nothing
@@ -2773,16 +2775,24 @@ static int callback_invite(const int w)
 	return 0; // Do not rebuild
 }
 
+static void unread_clear(const int n,const uint8_t owner)
+{ // XXX owner must be passed in, NOT fetched via a getter, because the deletion path calls this after the peer struct has been zero'd
+	if(n > -1 && t_peer[n].unread > 0)
+	{
+		if(owner == ENUM_OWNER_GROUP_CTRL)
+			totalUnreadGroup -= t_peer[n].unread;
+		else
+			totalUnreadPeer -= t_peer[n].unread;
+		t_peer[n].unread = 0;
+	}
+}
+
 static int callback_peer(const int w)
 { // Open a chat with a peer or group
 	(void)w;
 	global_n = selected_n;
 	const uint8_t owner = getter_uint8(global_n,INT_MIN,-1,offsetof(struct peer_list,owner));
-	if(owner == ENUM_OWNER_GROUP_CTRL)
-		totalUnreadGroup -= t_peer[global_n].unread;
-	else
-		totalUnreadPeer -= t_peer[global_n].unread;
-	t_peer[global_n].unread = 0;
+	unread_clear(global_n,owner);
 	chat_scroll_lines = 0;
 	torx_free((void*)&search);
 	draw_chat();
@@ -4946,11 +4956,12 @@ static int await_key_or_signal(WINDOW *win)
 					notify("TODO","ENUM_INCOMING_FRIEND_REQUEST");
 				}
 				else if(cb_page->cb_type == ENUM_ONION_DELETED)
-				{ // TODO should go_back in the case of global_n (ie receiving kill code), or we could have draw_chat and popovers trigger a go_back if the peer is deleted.
+				{
 					const int n = cb_page->cb_args->mem_int_a;
+					const uint8_t owner = cb_page->cb_args->mem_uint8; // XXX must use this, NOT a getter: the peer struct is already zero'd by the time we run XXX
 					torx_free((void*)&t_peer[n].unsent);
 					t_peer[n].unsent_pos = 0;
-					t_peer[n].unread = 0;
+					unread_clear(n,owner);
 					t_peer[n].pm_n = -1;
 					t_peer[n].edit_n = -1;
 					t_peer[n].edit_i = INT_MIN;
@@ -4961,17 +4972,17 @@ static int await_key_or_signal(WINDOW *win)
 						generated_n = -1;
 						must_redraw_ui = -2;
 					}
-					else
-					{
-						const uint8_t owner = cb_page->cb_args->mem_uint8;
-						if((window_contacts && ((owner == ENUM_OWNER_GROUP_CTRL && groups_mode == ENUM_SHOW_GROUP) || (owner == ENUM_OWNER_CTRL && groups_mode != ENUM_SHOW_GROUP)))
-						|| (window_ids && ((single_mode && owner == ENUM_OWNER_SING) || (!single_mode && owner == ENUM_OWNER_MULT)))
-						|| (window_requests && outgoing_mode && owner == ENUM_OWNER_PEER)
-						|| (window_chat && global_n == n)
-						|| (window_group_invite && owner == ENUM_OWNER_CTRL)
-						|| (window_group_peerlist && owner == ENUM_OWNER_GROUP_PEER && global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n))))
-							must_redraw_ui = -2; // alt: draw_contacts();
+					else if(global_n == n)
+					{ // The open peer/group was deleted (e.g. we received a kill code). Unwind every peer-context route back to contacts, matching gtk4 (onion_deleted_idle) and flutter (popUntil isFirst).
+						while(window_chat || window_chat_actions || window_message_actions || window_chat_settings || window_group_invite || window_group_peerlist || window_picker)
+							go_back(1); // each call unwinds one route; the final motion clears global_n and draws contacts
 					}
+					else if((window_contacts && ((owner == ENUM_OWNER_GROUP_CTRL && groups_mode == ENUM_SHOW_GROUP) || (owner == ENUM_OWNER_CTRL && groups_mode != ENUM_SHOW_GROUP)))
+					|| (window_ids && ((single_mode && owner == ENUM_OWNER_SING) || (!single_mode && owner == ENUM_OWNER_MULT)))
+					|| (window_requests && outgoing_mode && owner == ENUM_OWNER_PEER)
+					|| (window_group_invite && owner == ENUM_OWNER_CTRL)
+					|| (window_group_peerlist && owner == ENUM_OWNER_GROUP_PEER && global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n))))
+						must_redraw_ui = -2; // alt: draw_contacts();
 				}
 				else if(cb_page->cb_type == ENUM_PEER_ONLINE)
 				{
