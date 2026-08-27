@@ -21,7 +21,7 @@ nic
 `cmake -D TORX_TAG=main -B build && cd build && make && cd ..  && ./build/torx-ncurses`
 
 ###### For installing TorX (after building):
-`cd build && sudo make install`
+`cd build && sudo make install && sudo ldconfig`
 
 ###### For uninstalling TorX (after installing):
 `sudo xargs rm < install_manifest.txt`
