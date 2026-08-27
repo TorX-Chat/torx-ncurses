@@ -70,7 +70,7 @@ severable if found in contradiction with the License or applicable law.
 #include <time.h>	// time (UTC epoch seconds, for QR filenames)
 #include <beep.h>
 
-#define CLIENT_VERSION "TorX-Ncurses Alpha 2.0.45 2026/07/01 by TorX\n© Copyright 2026 TorX.\n"
+#define CLIENT_VERSION "TorX-Ncurses Alpha 2.1.47 2026/08/21 by TorX\n© Copyright 2026 TorX.\n"
 #define DARK_THEME 0
 #define LIGHT_THEME 1
 #define THEME_DEFAULT DARK_THEME
@@ -92,7 +92,7 @@ static inline void initialize_library(void (*callback)(void))
 {
 	sql_error_suppression = 1; // Necessary otherwise our terminal breaks when entering a wrong password
 
-	reduced_memory = 2; // TODO probably remove before release
+	// reduced_memory = 2; // 0 == 1024 (default), 1 == 256mb, 2 == 64mb
 
 	t_peer = torx_insecure_malloc(sizeof(struct t_peer_list) *11);
 	intitialize_async_callbacks(callback);
@@ -777,7 +777,7 @@ static void widget_clear(int *new_focus)
 	const int active_widgets = (int)(torx_allocation_len(widget) / sizeof(struct widget));
 	for(int w = 0; w < active_widgets; w++)
 		zero_w(w);
-	torx_free((void*)&widget);
+	torx_free((void**)&widget);
 }
 
 static void widget_draw_cursor(WINDOW *win)
@@ -958,7 +958,7 @@ static int callback_password(const int w)
 	if(!lockout_local)
 	{
 		login_start(*widget[w].text);
-		torx_free((void*)&*widget[w].text);
+		torx_free((void**)&*widget[w].text);
 		*widget[w].cursor = 0; // must reset when freeing password
 	}
 	else
@@ -1078,7 +1078,7 @@ static void go_back(size_t motions)
 					t_peer[global_n].pm_n = -1;
 					t_peer[global_n].edit_n = -1;
 					t_peer[global_n].edit_i = INT_MIN;
-					torx_free((void*)&t_peer[global_n].unsent);
+					torx_free((void**)&t_peer[global_n].unsent);
 					t_peer[global_n].unsent_pos = 0;
 					if(motions < 2)
 						redraw();
@@ -1086,35 +1086,35 @@ static void go_back(size_t motions)
 				}
 				global_n = -1;
 				global_group = -1;
-				torx_free((void*)&search);
+				torx_free((void**)&search);
 			}
 			else if(window_settings)
 			{
-				torx_free((void*)&tmp_lyrebird_location);
-				torx_free((void*)&tmp_conjure_location);
-				torx_free((void*)&tmp_tor_location);
-				torx_free((void*)&tmp_threads_max);
-				torx_free((void*)&tmp_suffix_length);
-				torx_free((void*)&tmp_sing_expiration_days);
-				torx_free((void*)&tmp_mult_expiration_days);
-				torx_free((void*)&tmp_tor_socks_port);
-				torx_free((void*)&tmp_tor_ctrl_port);
-				torx_free((void*)&tmp_control_password_clear);
+				torx_free((void**)&tmp_lyrebird_location);
+				torx_free((void**)&tmp_conjure_location);
+				torx_free((void**)&tmp_tor_location);
+				torx_free((void**)&tmp_threads_max);
+				torx_free((void**)&tmp_suffix_length);
+				torx_free((void**)&tmp_sing_expiration_days);
+				torx_free((void**)&tmp_mult_expiration_days);
+				torx_free((void**)&tmp_tor_socks_port);
+				torx_free((void**)&tmp_tor_ctrl_port);
+				torx_free((void**)&tmp_control_password_clear);
 			}
 			else if(window_generate)
 			{
-				torx_free((void*)&generate_input);
-				torx_free((void*)&generate_output);
-				torx_free((void*)&add_identifier);
-				torx_free((void*)&add_id);
+				torx_free((void**)&generate_input);
+				torx_free((void**)&generate_output);
+				torx_free((void**)&add_identifier);
+				torx_free((void**)&add_id);
 				generated_n = -1;
 			}
 			else if(window_logs)
-				torx_free((void*)&tmp_debug_level);
+				torx_free((void**)&tmp_debug_level);
 			else if(window_ids)
-				torx_free((void*)&search);
+				torx_free((void**)&search);
 			else if(window_requests)
-				torx_free((void*)&search);
+				torx_free((void**)&search);
 			if(motions < 2)
 				draw_contacts();
 			else // Must prepare prior to destruction
@@ -1123,7 +1123,7 @@ static void go_back(size_t motions)
 		else if(window_chat_actions || window_message_actions || window_chat_settings)
 		{
 			if(window_chat_actions || window_message_actions)
-				torx_free((void*)&tmp_rename);
+				torx_free((void**)&tmp_rename);
 			if(motions < 2)
 				draw_chat();
 			else // Must prepare prior to destruction
@@ -1131,7 +1131,7 @@ static void go_back(size_t motions)
 		}
 		else if(window_group_invite || window_group_peerlist)
 		{
-			torx_free((void*)&search);
+			torx_free((void**)&search);
 			if(motions < 2)
 				draw_chat_actions();
 			else // Must prepare prior to destruction
@@ -1140,13 +1140,13 @@ static void go_back(size_t motions)
 		else if(window_torrc || window_change_password)
 		{
 			if(window_torrc)
-				torx_free((void*)&torrc_content_local);
+				torx_free((void**)&torrc_content_local);
 			else if(window_change_password)
 			{
-				torx_free((void*)&password);
-				torx_free((void*)&password_old);
-				torx_free((void*)&password_new);
-				torx_free((void*)&password_verify);
+				torx_free((void**)&password);
+				torx_free((void**)&password_old);
+				torx_free((void**)&password_new);
+				torx_free((void**)&password_verify);
 			}
 			if(motions < 2)
 				draw_settings();
@@ -1155,7 +1155,7 @@ static void go_back(size_t motions)
 		}
 		else if(window_requests_popover)
 		{
-			torx_free((void*)&tmp_rename);
+			torx_free((void**)&tmp_rename);
 			if(motions < 2)
 				draw_requests();
 			else // Must prepare prior to destruction
@@ -1163,7 +1163,7 @@ static void go_back(size_t motions)
 		}
 		else if(window_ids_popover)
 		{
-			torx_free((void*)&tmp_rename);
+			torx_free((void**)&tmp_rename);
 			if(motions < 2)
 				draw_ids();
 			else // Must prepare prior to destruction
@@ -1176,19 +1176,19 @@ static void go_back(size_t motions)
 			if(picker_result)
 			{
 				for(size_t j = 0; j < torx_allocation_len(picker_result) / sizeof(char*); j++)
-					torx_free((void*)&picker_result[j]);
-				torx_free((void*)&picker_result);
+					torx_free((void**)&picker_result[j]);
+				torx_free((void**)&picker_result);
 			}
 			if(picker_selected)
 			{
 				for(size_t j = 0; j < torx_allocation_len(picker_selected) / sizeof(char*); j++)
-					torx_free((void*)&picker_selected[j]);
-				torx_free((void*)&picker_selected);
+					torx_free((void**)&picker_selected[j]);
+				torx_free((void**)&picker_selected);
 			}
-			torx_free((void*)&picker_dir);
-			torx_free((void*)&picker_focused_name);
-			torx_free((void*)&picker_newdir);
-			torx_free((void*)&search);
+			torx_free((void**)&picker_dir);
+			torx_free((void**)&picker_focused_name);
+			torx_free((void**)&picker_newdir);
+			torx_free((void**)&search);
 			picker_newdir_pos = 0;
 			picker_callback = NULL;
 			void (*ret)(void) = picker_return;
@@ -1985,7 +1985,7 @@ static int callback_tor_location(const int w)
 	if(tmp_tor_location)
 	{
 		pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-		torx_free((void*)&tor_location);
+		torx_free((void**)&tor_location);
 		tor_location = torx_copy(tmp_tor_location);
 		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
 		sql_setting(1,-1,"tor_location",tmp_tor_location,torx_allocation_len(tmp_tor_location)-1);
@@ -2002,7 +2002,7 @@ static int callback_lyrebird_location(const int w)
 	if(tmp_lyrebird_location)
 	{
 		pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-		torx_free((void*)&lyrebird_location);
+		torx_free((void**)&lyrebird_location);
 		lyrebird_location = torx_copy(tmp_lyrebird_location);
 		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
 		sql_setting(1,-1,"lyrebird_location",tmp_lyrebird_location,torx_allocation_len(tmp_lyrebird_location)-1);
@@ -2019,7 +2019,7 @@ static int callback_conjure_location(const int w)
 	if(tmp_conjure_location)
 	{
 		pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-		torx_free((void*)&conjure_location);
+		torx_free((void**)&conjure_location);
 		conjure_location = torx_copy(tmp_conjure_location);
 		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
 		sql_setting(1,-1,"conjure_location",tmp_conjure_location,torx_allocation_len(tmp_conjure_location)-1);
@@ -2107,7 +2107,7 @@ static int callback_ctrl_pass(const int w)
 	if(changed)
 	{
 		pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-		torx_free((void*)&control_password_clear);
+		torx_free((void**)&control_password_clear);
 		if(new_len)
 			control_password_clear = torx_copy(tmp_control_password_clear);
 		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
@@ -2230,7 +2230,7 @@ static int callback_generate_one(const int w)
 		g = group_generate(1,generate_input);
 	else // generate sing
 		generate_onion(ENUM_OWNER_SING,NULL,generate_input);
-	torx_free((void*)&generate_input);
+	torx_free((void**)&generate_input);
 	generate_input_cursor = 0;
 	if(g > -1)
 	{ // Immediate result available
@@ -2251,7 +2251,7 @@ static int callback_generate_two(const int w)
 		g = group_generate(0,generate_input);
 	else // generate mult
 		generate_onion(ENUM_OWNER_MULT,NULL,generate_input);
-	torx_free((void*)&generate_input);
+	torx_free((void**)&generate_input);
 	generate_input_cursor = 0;
 	if(g > -1)
 	{ // Immediate result available
@@ -2282,8 +2282,8 @@ static int callback_attempt_connect(const int w)
 		ret = peer_save(add_id,add_identifier);
 	if(ret > -1)
 	{ // Successfully saved a group or peer
-		torx_free((void*)&add_identifier);
-		torx_free((void*)&add_id);
+		torx_free((void**)&add_identifier);
+		torx_free((void**)&add_id);
 		add_identifier_cursor = 0;
 		add_id_cursor = 0;
 		return 1; // Rebuild
@@ -2448,7 +2448,7 @@ static int scrollable(WINDOW *win,size_t *fyp,size_t *fxp,const size_t item_to_d
 			const char *dd = (dd_local && *dd_local) ? dd_local : text_choose_folder; // placeholder keeps the button visible/focusable when unset
 			*fyp += 1,*fxp = align_right(torx_utf8len(dd));
 			widget_button(win,fyp,fxp,printable_width,callback_browse_download_dir,dd);
-			torx_free((void*)&dd_local);
+			torx_free((void**)&dd_local);
 			return 0; // Printed last (XXX IMPORTANT: sets more_to_print XXX)
 		}
 		else
@@ -2765,7 +2765,7 @@ static int callback_invite(const int w)
 { // utilizes treeview_n
 	(void)w;
 	const int g = global_group;
-	const uint32_t g_peercount = getter_group_uint32(g,offsetof(struct group_list,peercount));
+	const uint32_t g_peercount = group_peercount(g);
 	const uint8_t g_invite_required = getter_group_uint8(g,offsetof(struct group_list,invite_required));
 	if(g_invite_required == 1 && g_peercount == 0)
 		message_send(treeview_n,ENUM_PROTOCOL_GROUP_OFFER_FIRST,itovp(global_group),GROUP_OFFER_FIRST_LEN);
@@ -2794,7 +2794,7 @@ static int callback_peer(const int w)
 	const uint8_t owner = getter_uint8(global_n,INT_MIN,-1,offsetof(struct peer_list,owner));
 	unread_clear(global_n,owner);
 	chat_scroll_lines = 0;
-	torx_free((void*)&search);
+	torx_free((void**)&search);
 	draw_chat();
 	return 0; // Do not rebuild
 }
@@ -2945,13 +2945,13 @@ static void picker_toggle_selection(const char *path)
 	const size_t count = picker_selected ? torx_allocation_len(picker_selected) / sizeof(char*) : 0;
 	if(idx > -1)
 	{
-		torx_free((void*)&picker_selected[idx]);
+		torx_free((void**)&picker_selected[idx]);
 		for(size_t j = (size_t)idx; j + 1 < count; j++)
 			picker_selected[j] = picker_selected[j+1];
 		if(count > 1)
 			picker_selected = torx_realloc(picker_selected,sizeof(char*) * (count - 1));
 		else
-			torx_free((void*)&picker_selected);
+			torx_free((void**)&picker_selected);
 	}
 	else
 	{
@@ -3039,16 +3039,16 @@ static int callback_picker_entry(const int w)
 		if(!probe)
 		{ // Not readable (permissions, vanished, etc.); stay put and signal
 			beep();
-			torx_free((void*)&newdir);
+			torx_free((void**)&newdir);
 			return 0; // Do not rebuild
 		}
 		closedir(probe);
-		torx_free((void*)&picker_dir);
+		torx_free((void**)&picker_dir);
 		picker_dir = newdir;
 		picker_scroll_offset = 0;
 		focus_picker = -1; // default focus back to the first entry
-		torx_free((void*)&picker_focused_name);
-		torx_free((void*)&search); // clear the filter when changing directories
+		torx_free((void**)&picker_focused_name);
+		torx_free((void**)&search); // clear the filter when changing directories
 		return 1; // Rebuild
 	}
 	const size_t dir_len = torx_allocation_len(picker_dir) - 1, name_len = torx_allocation_len(picker_focused_name) - 1;
@@ -3084,7 +3084,7 @@ static int callback_picker_create(const int w)
 	#endif
 		beep(); // creation failed (already exists / no permission)
 	sodium_memzero(full,sizeof(full));
-	torx_free((void*)&picker_newdir);
+	torx_free((void**)&picker_newdir);
 	picker_newdir_pos = 0;
 	return 1; // Rebuild so the new directory appears in the list (and the field clears)
 }
@@ -3110,13 +3110,13 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 			const wint_t online_char = get_online_char(sendfd_connected,recvfd_connected);
 			char *peernick = getter_string(n,INT_MIN,-1,offsetof(struct peer_list,peernick));
 			snprintf(label,sizeof(label),"%lc %s",online_char,peernick);
-			torx_free((void*)&peernick);
+			torx_free((void**)&peernick);
 			if(widget_button(win,fyp,fxp,printable_width+1,window_group_invite ? callback_invite : callback_pm,label) == *focus) // the +1 is to prevent wrapping
 				treeview_n = n;
 		}
 		if((int)iter < len)
 			more_to_print = 1;
-		torx_free((void*)&array);
+		torx_free((void**)&array);
 		sodium_memzero(label,sizeof(label));
 	}
 	else if(win == window_contacts)
@@ -3151,7 +3151,7 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 					snprintf(label,sizeof(label),"%lc(%lu) %s",online_char,t_peer[n].unread,peernick);
 				else
 					snprintf(label,sizeof(label),"%lc %s",online_char,peernick);
-				torx_free((void*)&peernick);
+				torx_free((void**)&peernick);
 				if(sendfd_connected || recvfd_connected)
 					wattron(win,A_BOLD); // bold on
 				const int w = widget_button(win,fyp,fxp,printable_width,callback_peer,label);
@@ -3162,7 +3162,7 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 			}
 			if((int)iter < len)
 				more_to_print = 1;
-			torx_free((void*)&array);
+			torx_free((void**)&array);
 			sodium_memzero(label,sizeof(label));
 		}
 	}
@@ -3197,13 +3197,13 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 					snprintf(label,sizeof(label),"%s %s",peernick,onion);
 				if(widget_button(win,fyp,fxp,printable_width+1,callback_popover,label) == *focus) // the +1 is to prevent wrapping
 					treeview_n = n;
-				torx_free((void*)&peernick);
+				torx_free((void**)&peernick);
 			}
 			if((int)iter < len)
 				more_to_print = 1;
 			sodium_memzero(onion,sizeof(onion));
 			sodium_memzero(label,sizeof(label));
-			torx_free((void*)&array);
+			torx_free((void**)&array);
 		}
 	}
 	else if(win == window_picker)
@@ -3235,7 +3235,7 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 				toggle_highlight(win);
 			if(*focus == wgt)
 			{ // Remember the focused entry for the entry/Done callbacks
-				torx_free((void*)&picker_focused_name);
+				torx_free((void**)&picker_focused_name);
 				picker_focused_name = torx_insecure_malloc(name_len + 1);
 				memcpy(picker_focused_name,name,name_len + 1);
 				picker_focused_is_dir = is_dir;
@@ -3244,8 +3244,8 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 		if((int)iter < len)
 			more_to_print = 1;
 		for(int j = 0; j < len; j++)
-			torx_free((void*)&entries[j]);
-		torx_free((void*)&entries);
+			torx_free((void**)&entries[j]);
+		torx_free((void**)&entries);
 		sodium_memzero(label,sizeof(label));
 	}
 	else
@@ -3352,22 +3352,22 @@ static void draw_picker(void)
 static void picker_open(const uint8_t mode,const char *start_dir,void (*on_done)(char **selected),void (*return_route)(void))
 { // Open the picker. on_done receives the result array (consumed/freed afterward); return_route is redrawn when the picker closes.
 	picker_mode = mode;
-	torx_free((void*)&search); // start unfiltered; also prevents a stale search (e.g. from the contact list) carrying in
-	torx_free((void*)&picker_dir);
+	torx_free((void**)&search); // start unfiltered; also prevents a stale search (e.g. from the contact list) carrying in
+	torx_free((void**)&picker_dir);
 	if(start_dir)
 	{
 		const size_t l = strlen(start_dir) + 1;
 		picker_dir = torx_insecure_malloc(l);
 		memcpy(picker_dir,start_dir,l);
 	}
-	torx_free((void*)&picker_focused_name);
-	torx_free((void*)&picker_newdir);
+	torx_free((void**)&picker_focused_name);
+	torx_free((void**)&picker_newdir);
 	picker_newdir_pos = 0;
 	if(picker_selected)
 	{
 		for(size_t j = 0; j < torx_allocation_len(picker_selected) / sizeof(char*); j++)
-			torx_free((void*)&picker_selected[j]);
-		torx_free((void*)&picker_selected);
+			torx_free((void**)&picker_selected[j]);
+		torx_free((void**)&picker_selected);
 	}
 	picker_scroll_offset = 0;
 	focus_picker = -1;
@@ -3393,7 +3393,7 @@ static int callback_browse_location(char **target,int (*apply)(const int))
 	picker_location_apply = apply;
 	char *start = (*target && strchr(*target,platform_slash)) ? picker_parent(*target) : NULL;
 	picker_open(PICKER_FILE,start,picker_done_location,&draw_settings);
-	torx_free((void*)&start); // picker_open copied it
+	torx_free((void**)&start); // picker_open copied it
 	return 0; // picker drew itself
 }
 
@@ -3422,7 +3422,7 @@ static void picker_done_download_dir(char **selected)
 	{
 		const size_t l = strlen(selected[0]);
 		pthread_rwlock_wrlock(&mutex_global_variable); // 🟥
-		torx_free((void*)&download_dir);
+		torx_free((void**)&download_dir);
 		download_dir = torx_secure_malloc(l + 1); // sensitive: matches libtorx's allocation
 		memcpy(download_dir,selected[0],l + 1);
 		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
@@ -3437,7 +3437,7 @@ static int callback_browse_download_dir(const int w)
 	char *start = torx_copy(download_dir); // NULL → picker defaults to cwd
 	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
 	picker_open(PICKER_DIR,start,picker_done_download_dir,&draw_settings);
-	torx_free((void*)&start);
+	torx_free((void**)&start);
 	return 0; // picker drew itself
 }
 
@@ -3458,7 +3458,7 @@ static int callback_send_files(const int w)
 	char *start = torx_copy(download_dir); // NULL → picker defaults to cwd
 	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
 	picker_open(PICKER_FILES,start,picker_done_send_files,&draw_chat);
-	torx_free((void*)&start);
+	torx_free((void**)&start);
 	return 0; // picker drew itself
 }
 
@@ -3479,7 +3479,7 @@ static void picker_done_save_qr(char **selected)
 		char *group_id_encoded = b64_encode(id,GROUP_ID_SIZE);
 		sodium_memzero(id,sizeof(id));
 		qr_data = qr_bool(group_id_encoded,8);
-		torx_free((void*)&group_id_encoded);
+		torx_free((void**)&group_id_encoded);
 	}
 	else
 	{ // TorX-ID as QR
@@ -3495,9 +3495,9 @@ static void picker_done_save_qr(char **selected)
 	snprintf(file_path,sizeof(file_path),"%s%cqr%lld.png",selected[0],platform_slash,(long long)time(NULL));
 	write_bytes(file_path,png_data,png_size);
 	sodium_memzero(file_path,sizeof(file_path));
-	torx_free((void*)&png_data);
-	torx_free((void*)&qr_data->data);
-	torx_free((void*)&qr_data);
+	torx_free((void**)&png_data);
+	torx_free((void**)&qr_data->data);
+	torx_free((void**)&qr_data);
 }
 
 static int callback_save_qr(const int n,void (*return_route)(void))
@@ -3512,7 +3512,7 @@ static int callback_save_qr(const int n,void (*return_route)(void))
 	char *start = torx_copy(download_dir); // NULL → picker defaults to cwd
 	pthread_rwlock_unlock(&mutex_global_variable); // 🟩
 	picker_open(PICKER_DIR,start,picker_done_save_qr,return_route);
-	torx_free((void*)&start);
+	torx_free((void**)&start);
 	return 0; // picker drew itself
 }
 
@@ -3536,7 +3536,7 @@ static int callback_save_qr_generate(const int w)
 static int callback_torrc(const int w)
 {
 	(void)w;
-	torx_free((void*)&torrc_content_local);
+	torx_free((void**)&torrc_content_local);
 	torrc_pos = 0;
 	pthread_rwlock_rdlock(&mutex_global_variable); // 🟧
 	torrc_content_local = torx_copy(torrc_content);
@@ -3650,7 +3650,7 @@ static int callback_save_torrc(const int w)
 	else
 	{
 		notify(text_override,torrc_errors); // TODO should give an option to override errors
-		torx_free((void*)&torrc_errors);
+		torx_free((void**)&torrc_errors);
 	}
 	return 0; // Do not rebuild
 }
@@ -3699,10 +3699,10 @@ static void draw_change_password(void)
 static int callback_toggle_group(const int w)
 {
 	(void)w;
-	torx_free((void*)&generate_input);
-	torx_free((void*)&generate_output);
-	torx_free((void*)&add_identifier);
-	torx_free((void*)&add_id);
+	torx_free((void**)&generate_input);
+	torx_free((void**)&generate_output);
+	torx_free((void**)&add_identifier);
+	torx_free((void**)&add_id);
 	generated_n = -1;
 	generate_group_mode = !generate_group_mode;
 	return 1; // Rebuild
@@ -3768,7 +3768,7 @@ static void draw_global_kill(void)
 static int callback_group_invite(const int w)
 {
 	(void)w;
-	torx_free((void*)&search);
+	torx_free((void**)&search);
 	draw_group_invite();
 	return 0; // Do not rebuild
 }
@@ -3776,7 +3776,7 @@ static int callback_group_invite(const int w)
 static int callback_group_peerlist(const int w)
 {
 	(void)w;
-	torx_free((void*)&search);
+	torx_free((void**)&search);
 	draw_group_peerlist();
 	return 0; // Do not rebuild
 }
@@ -3824,7 +3824,7 @@ static void draw_chat_actions(void)
 			fy += 2, fx = align_right(torx_utf8len(group_id_encoded));
 			print_wrap(win, &fy, &fx, printable_width, group_id_encoded, torx_allocation_len(group_id_encoded)-1);
 			sodium_memzero(id,sizeof(id));
-			torx_free((void*)&group_id_encoded);
+			torx_free((void**)&group_id_encoded);
 			fy += 2, fx = align_right(torx_utf8len(text_save_qr));
 			widget_button(win,&fy,&fx,printable_width,callback_save_qr_chat_actions,text_save_qr);
 		}
@@ -4065,7 +4065,7 @@ static int callback_chat_settings(const int w)
 static int callback_requests(const int w)
 {
 	(void)w;
-	torx_free((void*)&search);
+	torx_free((void**)&search);
 	draw_requests();
 	return 0; // Do not rebuild
 }
@@ -4073,7 +4073,7 @@ static int callback_requests(const int w)
 static int callback_ids(const int w)
 {
 	(void)w;
-	torx_free((void*)&search);
+	torx_free((void**)&search);
 	draw_ids();
 	return 0; // Do not rebuild
 }
@@ -4180,7 +4180,7 @@ static int callback_message_edit(const int w)
 	t_peer[global_n].edit_n = selected_msg_n;
 	t_peer[global_n].edit_i = selected_msg_i;
 
-	torx_free((void*)&t_peer[global_n].unsent);
+	torx_free((void**)&t_peer[global_n].unsent);
 	t_peer[global_n].unsent_pos = 0;
 
 	t_peer[global_n].unsent = getter_string(selected_msg_n,selected_msg_i,-1,offsetof(struct message_list,message));
@@ -4222,9 +4222,9 @@ static void picker_done_file_accept(char **selected)
 			snprintf(full,l,"%s%c%s",selected[0],platform_slash,filename);
 			file_set_path(file_accept_n,file_accept_f,full);
 			file_accept(file_accept_n,file_accept_f);
-			torx_free((void*)&full);
+			torx_free((void**)&full);
 		}
-		torx_free((void*)&filename);
+		torx_free((void**)&filename);
 	}
 	file_accept_n = file_accept_f = -1;
 }
@@ -4241,7 +4241,7 @@ static int callback_file_accept(const int w)
 	{ // Inbound file needs a destination. file_accept uses download_dir if set; otherwise ask the user for a folder.
 		char *file_path = getter_string(file_n,INT_MIN,f,offsetof(struct file_list,file_path));
 		const uint8_t path_exists = file_path ? 1 : 0;
-		torx_free((void*)&file_path);
+		torx_free((void**)&file_path);
 		pthread_rwlock_rdlock(&mutex_global_variable); // 🟧
 		const uint8_t dd_exists = download_dir ? 1 : 0;
 		pthread_rwlock_unlock(&mutex_global_variable); // 🟩
@@ -4470,7 +4470,7 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 			uint32_t untrusted_peercount;
 			const int g = set_g_from_i(&untrusted_peercount,n,i);
 			const int group_n = getter_group_int(g,offsetof(struct group_list,n));
-			const uint32_t g_peercount = getter_group_uint32(g,offsetof(struct group_list,peercount));
+			const uint32_t g_peercount = group_peercount(g);
 			const uint8_t g_invite_required = getter_group_uint8(g,offsetof(struct group_list,invite_required));
 			const uint32_t peercount = untrusted_peercount > g_peercount ? untrusted_peercount : g_peercount; // use whatever is higher
 			char *g_peernick = group_n > -1 ? getter_string(group_n,INT_MIN,-1,offsetof(struct peer_list,peernick)) : NULL;
@@ -4487,7 +4487,7 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 			message_len = printable_len + 1;
 			message = torx_secure_malloc(message_len);
 			snprintf(message,message_len,"%s %s: %u %s",g_invite_required ? text_group_private : text_group_public,text_current_members,peercount,g_peernick); // must be same as above
-			torx_free((void*)&g_peernick);
+			torx_free((void**)&g_peernick);
 		}
 		else if(file_offer && notifiable)
 		{ // Render a file offer as: marker filename — progress [(percent)]. Mirrors the GTK4/Flutter clients: file_progress_string yields the size when idle, speed/ETA while transferring, or "Cancelled"; the percentage is appended for every status except awaiting-acceptance and cancelled (where those clients hide the progress bar). Recomputed each redraw so progress updates live. notifiable excludes non-notifiable internals like FILE_OFFER_PARTIAL.
@@ -4495,8 +4495,8 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 			const int f = set_f_from_i(&file_n,n,i);
 			if(f < 0)
 			{ // File not yet known (e.g. metadata not received); nothing to render
-				torx_free((void*)&timebuffer);
-				torx_free((void*)&peernick);
+				torx_free((void**)&timebuffer);
+				torx_free((void**)&peernick);
 				return lines;
 			}
 			char *filename = getter_string(file_n,INT_MIN,f,offsetof(struct file_list,filename));
@@ -4529,8 +4529,8 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 				message = torx_secure_malloc(message_len);
 				snprintf(message,message_len,"%s %s — %s (%u%%)",marker,filename ? filename : "",p ? p : "",percent); // must be same as above
 			}
-			torx_free((void*)&filename);
-			torx_free((void*)&progress);
+			torx_free((void**)&filename);
+			torx_free((void**)&progress);
 		}
 		else
 			printable_len = message_len - null_terminated_len - date_len - signature_len;
@@ -4604,9 +4604,9 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 		}
 		else // not actually printing
 			lines = anticipated_lines;
-		torx_free((void*)&message);
-		torx_free((void*)&timebuffer);
-		torx_free((void*)&peernick);
+		torx_free((void**)&message);
+		torx_free((void**)&timebuffer);
+		torx_free((void**)&peernick);
 	}
 	return lines;
 }
@@ -4650,7 +4650,7 @@ static int callback_message_input(const int w)
 			else // regular messages, private messages (in authenticated pipes), public messages in public groups (in authenticated pipes)
 				message_send(n,ENUM_PROTOCOL_UTF8_TEXT,t_peer[n].unsent,torx_allocation_len(t_peer[n].unsent)-1);
 		}
-		torx_free((void*)&t_peer[n].unsent);
+		torx_free((void**)&t_peer[n].unsent);
 		t_peer[n].unsent_pos = 0;
 		chat_scroll_lines = 0;
 	}
@@ -4696,7 +4696,7 @@ static void draw_chat(void)
 		char *peernick = getter_string(t_peer[n].pm_n,INT_MIN,-1,offsetof(struct peer_list,peernick));
 		char cancel_message[256]; // zero'd
 		snprintf(cancel_message,sizeof(cancel_message),"%s %s",text_private_messaging,peernick);
-		torx_free((void*)&peernick);
+		torx_free((void**)&peernick);
 		print_nowrap(win,&fy,&fx,printable_width,cancel_message,strlen(cancel_message));
 		sodium_memzero(cancel_message,sizeof(cancel_message));
 	}
@@ -4720,7 +4720,7 @@ static void draw_chat(void)
 	const wint_t online_char = get_online_char(sendfd_connected,recvfd_connected);
 	char *peernick = getter_string(n,INT_MIN,-1,offsetof(struct peer_list,peernick));
 	snprintf(label,sizeof(label),"%lc %s",online_char,peernick);
-	torx_free((void*)&peernick);
+	torx_free((void**)&peernick);
 	wattron(win,A_BOLD); // bold on
 	fy = 0,fx = 2;
 	print_nowrap(win,&fy,&fx,printable_width,label,strlen(label));
@@ -4925,23 +4925,23 @@ static int await_key_or_signal(WINDOW *win)
 					const int val = cb_page->cb_args->mem_int_a;
 					if(val == 0 || val == -1)
 					{ // Success
-						torx_free((void*)&password_old);
-						torx_free((void*)&password_new);
-						torx_free((void*)&password_verify);
+						torx_free((void**)&password_old);
+						torx_free((void**)&password_new);
+						torx_free((void**)&password_verify);
 						pw_old_cursor = 0;
 						pw_new_cursor = 0;
 						pw_verify_cursor = 0;
 					}
 					else if(val == 1)
 					{ // Incorrect old
-						torx_free((void*)&password_old);
+						torx_free((void**)&password_old);
 						pw_old_cursor = 0;
 						beep();
 					}
 					else if(val == 2)
 					{ // Inconsistent new
-						torx_free((void*)&password_new);
-						torx_free((void*)&password_verify);
+						torx_free((void**)&password_new);
+						torx_free((void**)&password_verify);
 						pw_new_cursor = 0;
 						pw_verify_cursor = 0;
 						beep();
@@ -4959,7 +4959,7 @@ static int await_key_or_signal(WINDOW *win)
 				{
 					const int n = cb_page->cb_args->mem_int_a;
 					const uint8_t owner = cb_page->cb_args->mem_uint8; // XXX must use this, NOT a getter: the peer struct is already zero'd by the time we run XXX
-					torx_free((void*)&t_peer[n].unsent);
+					torx_free((void**)&t_peer[n].unsent);
 					t_peer[n].unsent_pos = 0;
 					unread_clear(n,owner);
 					t_peer[n].pm_n = -1;
@@ -4968,7 +4968,7 @@ static int await_key_or_signal(WINDOW *win)
 					t_peer[n].mute = 0; // 0 no, 1 yes
 					if(n == generated_n)
 					{
-						torx_free((void*)&generate_output);
+						torx_free((void**)&generate_output);
 						generated_n = -1;
 						must_redraw_ui = -2;
 					}
@@ -5207,13 +5207,13 @@ static int await_key_or_signal(WINDOW *win)
 				{
 					// currently N/A
 				}
-				torx_free((void*)&cb_page->cb_args->mem_charp_a);
-				torx_free((void*)&cb_page->cb_args->mem_charp_b);
-				torx_free((void*)&cb_page->cb_args->mem_ucharp);
-				torx_free((void*)&cb_page->cb_args->mem_intp_a);
-				torx_free((void*)&cb_page->cb_args->mem_intp_b);
-				torx_free((void*)&cb_page->cb_args);
-				torx_free((void*)&cb_page);
+				torx_free((void**)&cb_page->cb_args->mem_charp_a);
+				torx_free((void**)&cb_page->cb_args->mem_charp_b);
+				torx_free((void**)&cb_page->cb_args->mem_ucharp);
+				torx_free((void**)&cb_page->cb_args->mem_intp_a);
+				torx_free((void**)&cb_page->cb_args->mem_intp_b);
+				torx_free((void**)&cb_page->cb_args);
+				torx_free((void**)&cb_page);
 			}
 			if(must_redraw_ui)
 				return must_redraw_ui;
@@ -5382,7 +5382,7 @@ int main(int argc, char **argv)
 		}
 	}
 	cleanup_lib(sig_num);
-	torx_free((void*)&search);
+	torx_free((void**)&search);
 	widget_clear(NULL);
 	endwin();
 	if(notify_fds[0] >= 0)
