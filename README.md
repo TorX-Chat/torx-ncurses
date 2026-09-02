@@ -9,14 +9,18 @@ This page is primarily for developers and contributors.
 ##### Linux:
 
 ###### Install build dependencies:
-`sudo apt install git cmake xxd libsodium-dev libevent-dev libsqlcipher-dev build-essential libncurses-dev`
+(Ubuntu / Debian / Mobian) `sudo apt install git cmake xxd libsodium-dev libevent-dev libsqlcipher-dev build-essential libncurses-dev`
+<br>(Alpine / PostmarketOS) `doas apk add git cmake libsodium-dev libevent-dev sqlcipher-dev build-base ncurses-dev`
+<br>(Fedora) `sudo dnf install git cmake xxd libsodium-devel libevent-devel sqlcipher-devel gcc make ncurses-devel`
 
 ###### Install runtime dependencies (lyrebird is an optional transport):
-`sudo apt install tor lyrebird`
+(Ubuntu / Debian / Mobian) `sudo apt install tor lyrebird`
+<br>(Alpine / PostmarketOS) `doas apk add tor lyrebird`
+<br>(Fedora) `sudo dnf install tor obfs4`
 
 ###### Clone the repository
 `git clone https://github.com/TorX-Chat/torx-ncurses && cd torx-ncurses`
-nic
+
 ###### For building TorX normally:
 `cmake -D TORX_TAG=main -B build && cd build && make && cd ..  && ./build/torx-ncurses`
 
