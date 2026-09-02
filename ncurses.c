@@ -4848,6 +4848,350 @@ static inline void shift_or_append(char **destination,char **source,size_t *curs
 	}
 }
 
+static int drain_callbacks(void)
+{ // Drains the notification pipe, then the library's callback buffer. Returns non-zero if a redraw is required.
+	char buf[128];
+	ssize_t r;
+	do { // Must drain the pipe BEFORE the buffer, otherwise a callback queued between the two drains is consumed here while its notification byte is discarded, costing us the wakeup that would have handled it
+		r = read(notify_fds[0], buf, sizeof(buf));
+	} while(r > 0 || (r < 0 && errno == EINTR));
+	int must_redraw_ui = 0; // use this sparingly, only when necessary to do a full re-draw
+	for(struct cb_info *cb_page; (cb_page = cb_buffer()) ; )
+	{
+		if(cb_page->cb_type == ENUM_INITIALIZE_N)
+		{
+			const int n = cb_page->cb_args->mem_int_a;
+			t_peer[n].unsent = NULL;
+			t_peer[n].unsent_pos = 0;
+			t_peer[n].unread = 0;
+			t_peer[n].pm_n = -1;
+			t_peer[n].edit_n = -1;
+			t_peer[n].edit_i = INT_MIN;
+			t_peer[n].mute = 0; // 0 no, 1 yes
+		}
+		else if(cb_page->cb_type == ENUM_INITIALIZE_I)
+		{
+			// currently N/A
+		}
+		else if(cb_page->cb_type == ENUM_INITIALIZE_G)
+		{
+			// currently N/A
+		}
+		else if(cb_page->cb_type == ENUM_SHRINKAGE)
+		{
+			// currently N/A
+		}
+		else if(cb_page->cb_type == ENUM_EXPAND_MESSAGE_STRUC)
+		{
+			// currently N/A
+		}
+		else if(cb_page->cb_type == ENUM_EXPAND_PEER_STRUC)
+		{
+			const uint32_t current_allocation_size = torx_allocation_len(t_peer);
+			t_peer = torx_realloc(t_peer,current_allocation_size + sizeof(struct t_peer_list) *10);
+		}
+		else if(cb_page->cb_type == ENUM_EXPAND_GROUP_STRUC)
+		{
+			// currently N/A
+		}
+		else if(cb_page->cb_type == ENUM_CHANGE_PASSWORD)
+		{
+			const int val = cb_page->cb_args->mem_int_a;
+			if(val == 0 || val == -1)
+			{ // Success
+				torx_free((void**)&password_old);
+				torx_free((void**)&password_new);
+				torx_free((void**)&password_verify);
+				pw_old_cursor = 0;
+				pw_new_cursor = 0;
+				pw_verify_cursor = 0;
+			}
+			else if(val == 1)
+			{ // Incorrect old
+				torx_free((void**)&password_old);
+				pw_old_cursor = 0;
+				beep();
+			}
+			else if(val == 2)
+			{ // Inconsistent new
+				torx_free((void**)&password_new);
+				torx_free((void**)&password_verify);
+				pw_new_cursor = 0;
+				pw_verify_cursor = 0;
+				beep();
+			}
+			must_redraw_ui = -2;
+		}
+		else if(cb_page->cb_type == ENUM_INCOMING_FRIEND_REQUEST)
+		{
+			if(window_contacts || (window_requests && !outgoing_mode))
+				must_redraw_ui = -2;
+			totalIncoming++;
+			notify("TODO","ENUM_INCOMING_FRIEND_REQUEST");
+		}
+		else if(cb_page->cb_type == ENUM_ONION_DELETED)
+		{
+			const int n = cb_page->cb_args->mem_int_a;
+			const uint8_t owner = cb_page->cb_args->mem_uint8; // XXX must use this, NOT a getter: the peer struct is already zero'd by the time we run XXX
+			torx_free((void**)&t_peer[n].unsent);
+			t_peer[n].unsent_pos = 0;
+			unread_clear(n,owner);
+			t_peer[n].pm_n = -1;
+			t_peer[n].edit_n = -1;
+			t_peer[n].edit_i = INT_MIN;
+			t_peer[n].mute = 0; // 0 no, 1 yes
+			if(n == generated_n)
+			{
+				torx_free((void**)&generate_output);
+				generated_n = -1;
+				must_redraw_ui = -2;
+			}
+			else if(global_n == n)
+			{ // The open peer/group was deleted (e.g. we received a kill code). Unwind every peer-context route back to contacts, matching gtk4 (onion_deleted_idle) and flutter (popUntil isFirst).
+				while(window_chat || window_chat_actions || window_message_actions || window_chat_settings || window_group_invite || window_group_peerlist || window_picker)
+					go_back(1); // each call unwinds one route; the final motion clears global_n and draws contacts
+			}
+			else if((window_contacts && ((owner == ENUM_OWNER_GROUP_CTRL && groups_mode == ENUM_SHOW_GROUP) || (owner == ENUM_OWNER_CTRL && groups_mode != ENUM_SHOW_GROUP)))
+			|| (window_ids && ((single_mode && owner == ENUM_OWNER_SING) || (!single_mode && owner == ENUM_OWNER_MULT)))
+			|| (window_requests && outgoing_mode && owner == ENUM_OWNER_PEER)
+			|| (window_group_invite && owner == ENUM_OWNER_CTRL)
+			|| (window_group_peerlist && owner == ENUM_OWNER_GROUP_PEER && global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n))))
+				must_redraw_ui = -2; // alt: draw_contacts();
+		}
+		else if(cb_page->cb_type == ENUM_PEER_ONLINE)
+		{
+			const int n = cb_page->cb_args->mem_int_a;
+			const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+			if((window_contacts && owner == ENUM_OWNER_CTRL && groups_mode == ENUM_SHOW_PEER)
+			|| (window_chat && global_n == n)
+			|| (window_group_invite && owner == ENUM_OWNER_CTRL)
+			|| (window_group_peerlist && owner == ENUM_OWNER_GROUP_PEER && global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n))))
+				must_redraw_ui = -2; // alt: draw_contacts();
+		}
+		else if(cb_page->cb_type == ENUM_PEER_OFFLINE)
+		{
+			const int n = cb_page->cb_args->mem_int_a;
+			const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+			if((window_contacts && owner == ENUM_OWNER_CTRL && groups_mode == ENUM_SHOW_PEER)
+			|| (window_chat && global_n == n)
+			|| (window_group_invite && owner == ENUM_OWNER_CTRL)
+			|| (window_group_peerlist && owner == ENUM_OWNER_GROUP_PEER && global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n))))
+				must_redraw_ui = -2; // alt: draw_contacts();
+		}
+		else if(cb_page->cb_type == ENUM_PEER_NEW)
+		{
+			const int n = cb_page->cb_args->mem_int_a;
+			const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+			if((window_contacts && groups_mode == ENUM_SHOW_PEER && owner == ENUM_OWNER_CTRL) || (window_group_peerlist && owner == ENUM_OWNER_GROUP_PEER && global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n))))
+				must_redraw_ui = -2;
+		}
+		else if(cb_page->cb_type == ENUM_ONION_READY)
+		{
+			generated_n = cb_page->cb_args->mem_int_a;
+			const uint8_t owner = getter_uint8(generated_n,INT_MIN,-1,offsetof(struct peer_list,owner));
+			if(threadsafe_read_uint8(&mutex_global_variable,&shorten_torxids))
+				generate_output = getter_string(generated_n, INT_MIN, -1, offsetof(struct peer_list, torxid));
+			else
+				generate_output = getter_string(generated_n, INT_MIN, -1, offsetof(struct peer_list, onion));
+			if(window_generate || (window_ids && ((single_mode && owner == ENUM_OWNER_SING) || (!single_mode && owner == ENUM_OWNER_MULT))))
+				must_redraw_ui = -2;
+		}
+		else if(cb_page->cb_type == ENUM_ERROR)
+		{
+			shift_or_append(&torx_log_buffer,&cb_page->cb_args->mem_charp_a,&torx_log_buffer_pos);
+			if(window_logs && !tor_log_mode)
+				must_redraw_ui = -2;
+		}
+		else if(cb_page->cb_type == ENUM_FATAL)
+		{
+			shift_or_append(&torx_log_buffer,&cb_page->cb_args->mem_charp_a,&torx_log_buffer_pos);
+			if(window_logs && !tor_log_mode)
+				must_redraw_ui = -2;
+		}
+		else if(cb_page->cb_type == ENUM_TOR_LOG)
+		{
+			shift_or_append(&tor_log_buffer,&cb_page->cb_args->mem_charp_a,&tor_log_buffer_pos);
+			if(window_logs && tor_log_mode)
+				must_redraw_ui = -2;
+		}
+		else if(cb_page->cb_type == ENUM_CUSTOM_SETTING)
+		{
+			const int n = cb_page->cb_args->mem_int_a;
+			const char *setting_name = cb_page->cb_args->mem_charp_a;
+			const char *setting_value = cb_page->cb_args->mem_charp_b;
+			size_t setting_value_len = cb_page->cb_args->mem_size;
+			int plaintext = cb_page->cb_args->mem_int_b;
+			if(!strncmp(setting_name,"theme",5))
+			{
+				const int proposed_theme = (int)strtoll(setting_value, NULL, 10);
+				if(proposed_theme != global_theme)
+				{
+					global_theme = proposed_theme;
+					must_redraw_ui = -2;
+				}
+			}
+			else if(!strncmp(setting_name,"language",8) && sizeof(language) == setting_value_len+1)
+			{ // We are requiring the language to be exactly 5 characters long to be considered valid (ex: en_US)
+				if(memcmp(language,setting_value,sizeof(language)))
+				{ // Loading a different language setting.
+					memcpy(language,setting_value,setting_value_len);
+					language[setting_value_len] = '\0';
+					ui_initialize_language();
+					must_redraw_ui = -2;
+				}
+			}
+			else if(plaintext == 0 && !strncmp(setting_name,"mute",4))
+				t_peer[n].mute = (int8_t)strtoll(setting_value, NULL, 10);
+			else if(plaintext == 0 && !strncmp(setting_name,"unread",6))
+			{
+				if(log_unread == 1)
+				{ // Ignoring if not logging, since they may be potentially old
+					const int8_t log_messages = getter_int8(n,INT_MIN,-1,offsetof(struct peer_list,log_messages));
+					if(log_messages == 1 || (!log_messages && threadsafe_read_uint8(&mutex_global_variable,&global_log_messages)))
+					{
+						t_peer[n].unread = strtoull(setting_value, NULL, 10);
+						if(t_peer[n].unread > 0)
+						{
+							const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+							if(owner == ENUM_OWNER_GROUP_CTRL)
+								totalUnreadGroup += t_peer[n].unread;
+							else
+								totalUnreadPeer += t_peer[n].unread;
+							if(window_contacts)
+								must_redraw_ui = -2;
+						}
+					}
+				}
+			}
+			else if(plaintext == 0)
+				error_printf(3,"Unrecognized encrypted config option: %s",setting_name);
+			else if(plaintext == 1)
+				error_printf(0,"Unrecognized unencrypted config option: %s",setting_name);
+		}
+		else if(cb_page->cb_type == ENUM_MESSAGE_NEW)
+		{
+			const int n = cb_page->cb_args->mem_int_a;
+			const int i = cb_page->cb_args->mem_int_b;
+			const int p_iter = getter_int(n,i,-1,offsetof(struct message_list,p_iter));
+			if(p_iter > -1)
+			{
+				pthread_rwlock_rdlock(&mutex_protocols); // 🟧
+				const uint8_t notifiable = protocols[p_iter].notifiable;
+				pthread_rwlock_unlock(&mutex_protocols); // 🟩
+				if(notifiable)
+				{
+					const uint8_t stat = getter_uint8(n,i,-1,offsetof(struct message_list,stat));
+					if(stat == ENUM_MESSAGE_RECV)
+					{ // Non-notifiable messages (e.g. FILE_REQUEST/FILE_PAUSE/FILE_CANCEL) are ignored entirely, as in the reference clients
+						int group_n = -1;
+						const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+						if(owner == ENUM_OWNER_GROUP_PEER)
+						{
+							const int g = set_g(n,NULL);
+							group_n = getter_group_int(g,offsetof(struct group_list,n));
+						}
+						if(global_n < 0 || (global_n != n && global_n != group_n))
+						{
+							if(group_n > -1)
+							{
+								t_peer[group_n].unread++;
+								totalUnreadGroup++;
+							}
+							else
+							{
+								t_peer[n].unread++;
+								totalUnreadPeer++;
+							}
+						}
+						if(window_contacts || (global_n > -1 && (global_n == n || global_n == group_n)))
+						{
+							if(window_chat && message_entry_currently_selected)
+								*current_focus = -1; // reset to default, which is message input (yes this is necessary)
+							must_redraw_ui = -2; // better than draw_chat(global_n); // NOT n or this could draw a PM chat
+						}
+						if((window_contacts || must_redraw_ui != -2) && (owner != ENUM_OWNER_GROUP_PEER || t_peer[group_n].mute == 0) && t_peer[n].mute == 0) // NOT else if
+							notify("TODO","ENUM_MESSAGE_NEW"); // Notify if on contact list, or if we're on a chat that isn't the relevant one
+					}
+				}
+			}
+		}
+		else if(cb_page->cb_type == ENUM_MESSAGE_MODIFIED)
+		{
+			const int n = cb_page->cb_args->mem_int_a;
+		//	const int i = cb_page->cb_args->mem_int_b;
+			if(n == global_n || (getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner)) == ENUM_OWNER_GROUP_PEER && global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n)))) // TODO could also check if this message is visible, if that is trivial, and verify that we didn't just manually edit this message (which also triggers MESSAGE_MODIFIED).
+				must_redraw_ui = -2;
+		}
+		else if(cb_page->cb_type == ENUM_TRANSFER_PROGRESS)
+		{ // A file transfer progressed. The library throttles these to file_progress_delay (2s) and always fires on completion/stall. Redraw if we are viewing that chat (file progress is only shown there), to update the file offer's progress.
+			const int n = cb_page->cb_args->mem_int_a;
+		//	const int f = cb_page->cb_args->mem_int_b;
+		//	const uint64_t transferred = cb_page->cb_args->mem_uint64;
+			int group_n = -1;
+			if(getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner)) == ENUM_OWNER_GROUP_PEER)
+				group_n = getter_group_int(set_g(n,NULL),offsetof(struct group_list,n));
+			if(window_chat && (global_n == n || global_n == group_n)) // window_chat implies global_n is a valid peer being viewed
+				must_redraw_ui = -2;
+		}
+		else if(cb_page->cb_type == ENUM_MESSAGE_DELETED)
+		{
+			// Unnecessary to do anything since this will only be manually triggered.
+		}
+		else if(cb_page->cb_type == ENUM_LOGIN)
+		{
+			const int value = cb_page->cb_args->mem_int_a;
+			if(value == 0) // Correct password
+				draw_contacts();
+			else // Wrong password
+				beep();
+		}
+		else if(cb_page->cb_type == ENUM_PEER_LOADED)
+		{
+			const int n = cb_page->cb_args->mem_int_a;
+			const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
+			const uint8_t status = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,status));
+			if(owner == ENUM_OWNER_CTRL && status == ENUM_STATUS_PENDING)
+			{
+				totalIncoming++;
+				if(window_contacts)
+					must_redraw_ui = -2;
+			}
+			else if(window_contacts && ((groups_mode == ENUM_SHOW_PEER && owner == ENUM_OWNER_CTRL) || (groups_mode == ENUM_SHOW_GROUP && owner == ENUM_OWNER_GROUP_CTRL)))
+				must_redraw_ui = -2;
+		}
+		else if(cb_page->cb_type == ENUM_CLEANUP)
+		{
+			running = false;
+			sig_num = cb_page->cb_args->mem_int_a;
+			must_redraw_ui = -1; // necessary
+		}
+		else if(cb_page->cb_type == ENUM_STREAM)
+		{
+			error_simple(0,"Checkpoint ENUM_STREAM");
+		}
+		else if(cb_page->cb_type == ENUM_MESSAGE_EXTRA)
+		{ // This is used in other clients for loading from disk whether an audio message has been heard/unheard
+			error_simple(0,"Checkpoint ENUM_MESSAGE_EXTRA");
+		}
+		else if(cb_page->cb_type == ENUM_MESSAGE_MORE)
+		{ // Triggers after we call message_load_more. Should be not need to be handled, but untested.
+			error_simple(0,"Checkpoint ENUM_MESSAGE_MORE");
+		}
+		else if(cb_page->cb_type == ENUM_UNKNOWN)
+		{
+			// currently N/A
+		}
+		torx_free((void**)&cb_page->cb_args->mem_charp_a);
+		torx_free((void**)&cb_page->cb_args->mem_charp_b);
+		torx_free((void**)&cb_page->cb_args->mem_ucharp);
+		torx_free((void**)&cb_page->cb_args->mem_intp_a);
+		torx_free((void**)&cb_page->cb_args->mem_intp_b);
+		torx_free((void**)&cb_page->cb_args);
+		torx_free((void**)&cb_page);
+	}
+	return must_redraw_ui;
+}
+
 static int await_key_or_signal(WINDOW *win)
 { // Blocks on select(), awaiting keypress or callback.
 	fd_set rfds;
@@ -4875,346 +5219,8 @@ static int await_key_or_signal(WINDOW *win)
 			return -1;
 		}
 		else if(FD_ISSET(notify_rd, &rfds))
-		{ // One or more callbacks are ready, must drain the pipe then return -2
-			char buf[128];
-			ssize_t r;
-			do {
-				r = read(notify_fds[0], buf, sizeof(buf));
-			} while(r > 0 || (r < 0 && errno == EINTR));
-			int must_redraw_ui = 0; // use this sparingly, only when necessary to do a full re-draw
-			for(struct cb_info *cb_page; (cb_page = cb_buffer()) ; )
-			{
-				if(cb_page->cb_type == ENUM_INITIALIZE_N)
-				{
-					const int n = cb_page->cb_args->mem_int_a;
-					t_peer[n].unsent = NULL;
-					t_peer[n].unsent_pos = 0;
-					t_peer[n].unread = 0;
-					t_peer[n].pm_n = -1;
-					t_peer[n].edit_n = -1;
-					t_peer[n].edit_i = INT_MIN;
-					t_peer[n].mute = 0; // 0 no, 1 yes
-				}
-				else if(cb_page->cb_type == ENUM_INITIALIZE_I)
-				{
-					// currently N/A
-				}
-				else if(cb_page->cb_type == ENUM_INITIALIZE_G)
-				{
-					// currently N/A
-				}
-				else if(cb_page->cb_type == ENUM_SHRINKAGE)
-				{
-					// currently N/A
-				}
-				else if(cb_page->cb_type == ENUM_EXPAND_MESSAGE_STRUC)
-				{
-					// currently N/A
-				}
-				else if(cb_page->cb_type == ENUM_EXPAND_PEER_STRUC)
-				{
-					const uint32_t current_allocation_size = torx_allocation_len(t_peer);
-					t_peer = torx_realloc(t_peer,current_allocation_size + sizeof(struct t_peer_list) *10);
-				}
-				else if(cb_page->cb_type == ENUM_EXPAND_GROUP_STRUC)
-				{
-					// currently N/A
-				}
-				else if(cb_page->cb_type == ENUM_CHANGE_PASSWORD)
-				{
-					const int val = cb_page->cb_args->mem_int_a;
-					if(val == 0 || val == -1)
-					{ // Success
-						torx_free((void**)&password_old);
-						torx_free((void**)&password_new);
-						torx_free((void**)&password_verify);
-						pw_old_cursor = 0;
-						pw_new_cursor = 0;
-						pw_verify_cursor = 0;
-					}
-					else if(val == 1)
-					{ // Incorrect old
-						torx_free((void**)&password_old);
-						pw_old_cursor = 0;
-						beep();
-					}
-					else if(val == 2)
-					{ // Inconsistent new
-						torx_free((void**)&password_new);
-						torx_free((void**)&password_verify);
-						pw_new_cursor = 0;
-						pw_verify_cursor = 0;
-						beep();
-					}
-					must_redraw_ui = -2;
-				}
-				else if(cb_page->cb_type == ENUM_INCOMING_FRIEND_REQUEST)
-				{
-					if(window_contacts || (window_requests && !outgoing_mode))
-						must_redraw_ui = -2;
-					totalIncoming++;
-					notify("TODO","ENUM_INCOMING_FRIEND_REQUEST");
-				}
-				else if(cb_page->cb_type == ENUM_ONION_DELETED)
-				{
-					const int n = cb_page->cb_args->mem_int_a;
-					const uint8_t owner = cb_page->cb_args->mem_uint8; // XXX must use this, NOT a getter: the peer struct is already zero'd by the time we run XXX
-					torx_free((void**)&t_peer[n].unsent);
-					t_peer[n].unsent_pos = 0;
-					unread_clear(n,owner);
-					t_peer[n].pm_n = -1;
-					t_peer[n].edit_n = -1;
-					t_peer[n].edit_i = INT_MIN;
-					t_peer[n].mute = 0; // 0 no, 1 yes
-					if(n == generated_n)
-					{
-						torx_free((void**)&generate_output);
-						generated_n = -1;
-						must_redraw_ui = -2;
-					}
-					else if(global_n == n)
-					{ // The open peer/group was deleted (e.g. we received a kill code). Unwind every peer-context route back to contacts, matching gtk4 (onion_deleted_idle) and flutter (popUntil isFirst).
-						while(window_chat || window_chat_actions || window_message_actions || window_chat_settings || window_group_invite || window_group_peerlist || window_picker)
-							go_back(1); // each call unwinds one route; the final motion clears global_n and draws contacts
-					}
-					else if((window_contacts && ((owner == ENUM_OWNER_GROUP_CTRL && groups_mode == ENUM_SHOW_GROUP) || (owner == ENUM_OWNER_CTRL && groups_mode != ENUM_SHOW_GROUP)))
-					|| (window_ids && ((single_mode && owner == ENUM_OWNER_SING) || (!single_mode && owner == ENUM_OWNER_MULT)))
-					|| (window_requests && outgoing_mode && owner == ENUM_OWNER_PEER)
-					|| (window_group_invite && owner == ENUM_OWNER_CTRL)
-					|| (window_group_peerlist && owner == ENUM_OWNER_GROUP_PEER && global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n))))
-						must_redraw_ui = -2; // alt: draw_contacts();
-				}
-				else if(cb_page->cb_type == ENUM_PEER_ONLINE)
-				{
-					const int n = cb_page->cb_args->mem_int_a;
-					const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-					if((window_contacts && owner == ENUM_OWNER_CTRL && groups_mode == ENUM_SHOW_PEER)
-					|| (window_chat && global_n == n)
-					|| (window_group_invite && owner == ENUM_OWNER_CTRL)
-					|| (window_group_peerlist && owner == ENUM_OWNER_GROUP_PEER && global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n))))
-						must_redraw_ui = -2; // alt: draw_contacts();
-				}
-				else if(cb_page->cb_type == ENUM_PEER_OFFLINE)
-				{
-					const int n = cb_page->cb_args->mem_int_a;
-					const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-					if((window_contacts && owner == ENUM_OWNER_CTRL && groups_mode == ENUM_SHOW_PEER)
-					|| (window_chat && global_n == n)
-					|| (window_group_invite && owner == ENUM_OWNER_CTRL)
-					|| (window_group_peerlist && owner == ENUM_OWNER_GROUP_PEER && global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n))))
-						must_redraw_ui = -2; // alt: draw_contacts();
-				}
-				else if(cb_page->cb_type == ENUM_PEER_NEW)
-				{
-					const int n = cb_page->cb_args->mem_int_a;
-					const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-					if((window_contacts && groups_mode == ENUM_SHOW_PEER && owner == ENUM_OWNER_CTRL) || (window_group_peerlist && owner == ENUM_OWNER_GROUP_PEER && global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n))))
-						must_redraw_ui = -2;
-				}
-				else if(cb_page->cb_type == ENUM_ONION_READY)
-				{
-					generated_n = cb_page->cb_args->mem_int_a;
-					const uint8_t owner = getter_uint8(generated_n,INT_MIN,-1,offsetof(struct peer_list,owner));
-					if(threadsafe_read_uint8(&mutex_global_variable,&shorten_torxids))
-						generate_output = getter_string(generated_n, INT_MIN, -1, offsetof(struct peer_list, torxid));
-					else
-						generate_output = getter_string(generated_n, INT_MIN, -1, offsetof(struct peer_list, onion));
-					if(window_generate || (window_ids && ((single_mode && owner == ENUM_OWNER_SING) || (!single_mode && owner == ENUM_OWNER_MULT))))
-						must_redraw_ui = -2;
-				}
-				else if(cb_page->cb_type == ENUM_ERROR)
-				{
-					shift_or_append(&torx_log_buffer,&cb_page->cb_args->mem_charp_a,&torx_log_buffer_pos);
-					if(window_logs && !tor_log_mode)
-						must_redraw_ui = -2;
-				}
-				else if(cb_page->cb_type == ENUM_FATAL)
-				{
-					shift_or_append(&torx_log_buffer,&cb_page->cb_args->mem_charp_a,&torx_log_buffer_pos);
-					if(window_logs && !tor_log_mode)
-						must_redraw_ui = -2;
-				}
-				else if(cb_page->cb_type == ENUM_TOR_LOG)
-				{
-					shift_or_append(&tor_log_buffer,&cb_page->cb_args->mem_charp_a,&tor_log_buffer_pos);
-					if(window_logs && tor_log_mode)
-						must_redraw_ui = -2;
-				}
-				else if(cb_page->cb_type == ENUM_CUSTOM_SETTING)
-				{
-					const int n = cb_page->cb_args->mem_int_a;
-					const char *setting_name = cb_page->cb_args->mem_charp_a;
-					const char *setting_value = cb_page->cb_args->mem_charp_b;
-					size_t setting_value_len = cb_page->cb_args->mem_size;
-					int plaintext = cb_page->cb_args->mem_int_b;
-					if(!strncmp(setting_name,"theme",5))
-					{
-						const int proposed_theme = (int)strtoll(setting_value, NULL, 10);
-						if(proposed_theme != global_theme && global_theme > -1 && proposed_theme != THEME_DEFAULT)
-						{ // Checking that it is (a) a change and (b) that we have already initialized, or that we haven't but we are different than default
-							global_theme = proposed_theme;
-							must_redraw_ui = -2;
-						}
-					}
-					else if(!strncmp(setting_name,"language",8) && sizeof(language) == setting_value_len+1)
-					{ // We are requiring the language to be exactly 5 characters long to be considered valid (ex: en_US)
-						if(memcmp(language,setting_value,sizeof(language)))
-						{ // Loading a different language setting.
-							memcpy(language,setting_value,setting_value_len);
-							language[setting_value_len] = '\0';
-							ui_initialize_language();
-							must_redraw_ui = -2;
-						}
-					}
-					else if(plaintext == 0 && !strncmp(setting_name,"mute",4))
-						t_peer[n].mute = (int8_t)strtoll(setting_value, NULL, 10);
-					else if(plaintext == 0 && !strncmp(setting_name,"unread",6))
-					{
-						if(log_unread == 1)
-						{ // Ignoring if not logging, since they may be potentially old
-							const int8_t log_messages = getter_int8(n,INT_MIN,-1,offsetof(struct peer_list,log_messages));
-							if(log_messages == 1 || (!log_messages && threadsafe_read_uint8(&mutex_global_variable,&global_log_messages)))
-							{
-								t_peer[n].unread = strtoull(setting_value, NULL, 10);
-								if(t_peer[n].unread > 0)
-								{
-									const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-									if(owner == ENUM_OWNER_GROUP_CTRL)
-										totalUnreadGroup += t_peer[n].unread;
-									else
-										totalUnreadPeer += t_peer[n].unread;
-									if(window_contacts)
-										must_redraw_ui = -2;
-								}
-							}
-						}
-					}
-					else if(plaintext == 0)
-						error_printf(3,"Unrecognized encrypted config option: %s",setting_name);
-					else if(plaintext == 1)
-						error_printf(0,"Unrecognized unencrypted config option: %s",setting_name);
-				}
-				else if(cb_page->cb_type == ENUM_MESSAGE_NEW)
-				{
-					const int n = cb_page->cb_args->mem_int_a;
-					const int i = cb_page->cb_args->mem_int_b;
-					const int p_iter = getter_int(n,i,-1,offsetof(struct message_list,p_iter));
-					if(p_iter > -1)
-					{
-						pthread_rwlock_rdlock(&mutex_protocols); // 🟧
-						const uint8_t notifiable = protocols[p_iter].notifiable;
-						pthread_rwlock_unlock(&mutex_protocols); // 🟩
-						if(notifiable)
-						{
-							const uint8_t stat = getter_uint8(n,i,-1,offsetof(struct message_list,stat));
-							if(stat == ENUM_MESSAGE_RECV)
-							{ // Non-notifiable messages (e.g. FILE_REQUEST/FILE_PAUSE/FILE_CANCEL) are ignored entirely, as in the reference clients
-								int group_n = -1;
-								const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-								if(owner == ENUM_OWNER_GROUP_PEER)
-								{
-									const int g = set_g(n,NULL);
-									group_n = getter_group_int(g,offsetof(struct group_list,n));
-								}
-								if(global_n < 0 || (global_n != n && global_n != group_n))
-								{
-									if(group_n > -1)
-									{
-										t_peer[group_n].unread++;
-										totalUnreadGroup++;
-									}
-									else
-									{
-										t_peer[n].unread++;
-										totalUnreadPeer++;
-									}
-								}
-								if(window_contacts || (global_n > -1 && (global_n == n || global_n == group_n)))
-								{
-									if(window_chat && message_entry_currently_selected)
-										*current_focus = -1; // reset to default, which is message input (yes this is necessary)
-									must_redraw_ui = -2; // better than draw_chat(global_n); // NOT n or this could draw a PM chat
-								}
-								if((window_contacts || must_redraw_ui != -2) && (owner != ENUM_OWNER_GROUP_PEER || t_peer[group_n].mute == 0) && t_peer[n].mute == 0) // NOT else if
-									notify("TODO","ENUM_MESSAGE_NEW"); // Notify if on contact list, or if we're on a chat that isn't the relevant one
-							}
-						}
-					}
-				}
-				else if(cb_page->cb_type == ENUM_MESSAGE_MODIFIED)
-				{
-					const int n = cb_page->cb_args->mem_int_a;
-				//	const int i = cb_page->cb_args->mem_int_b;
-					if(n == global_n || (getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner)) == ENUM_OWNER_GROUP_PEER && global_n == getter_group_int(set_g(n,NULL),offsetof(struct group_list,n)))) // TODO could also check if this message is visible, if that is trivial, and verify that we didn't just manually edit this message (which also triggers MESSAGE_MODIFIED).
-						must_redraw_ui = -2;
-				}
-				else if(cb_page->cb_type == ENUM_TRANSFER_PROGRESS)
-				{ // A file transfer progressed. The library throttles these to file_progress_delay (2s) and always fires on completion/stall. Redraw if we are viewing that chat (file progress is only shown there), to update the file offer's progress.
-					const int n = cb_page->cb_args->mem_int_a;
-				//	const int f = cb_page->cb_args->mem_int_b;
-				//	const uint64_t transferred = cb_page->cb_args->mem_uint64;
-					int group_n = -1;
-					if(getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner)) == ENUM_OWNER_GROUP_PEER)
-						group_n = getter_group_int(set_g(n,NULL),offsetof(struct group_list,n));
-					if(window_chat && (global_n == n || global_n == group_n)) // window_chat implies global_n is a valid peer being viewed
-						must_redraw_ui = -2;
-				}
-				else if(cb_page->cb_type == ENUM_MESSAGE_DELETED)
-				{
-					// Unnecessary to do anything since this will only be manually triggered.
-				}
-				else if(cb_page->cb_type == ENUM_LOGIN)
-				{
-					const int value = cb_page->cb_args->mem_int_a;
-					if(value == 0) // Correct password
-						draw_contacts();
-					else // Wrong password
-						beep();
-				}
-				else if(cb_page->cb_type == ENUM_PEER_LOADED)
-				{
-					const int n = cb_page->cb_args->mem_int_a;
-					const uint8_t owner = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,owner));
-					const uint8_t status = getter_uint8(n,INT_MIN,-1,offsetof(struct peer_list,status));
-					if(owner == ENUM_OWNER_CTRL && status == ENUM_STATUS_PENDING)
-					{
-						totalIncoming++;
-						if(window_contacts)
-							must_redraw_ui = -2;
-					}
-					else if(window_contacts && ((groups_mode == ENUM_SHOW_PEER && owner == ENUM_OWNER_CTRL) || (groups_mode == ENUM_SHOW_GROUP && owner == ENUM_OWNER_GROUP_CTRL)))
-						must_redraw_ui = -2;
-				}
-				else if(cb_page->cb_type == ENUM_CLEANUP)
-				{
-					running = false;
-					sig_num = cb_page->cb_args->mem_int_a;
-					must_redraw_ui = -1; // necessary
-				}
-				else if(cb_page->cb_type == ENUM_STREAM)
-				{
-					error_simple(0,"Checkpoint ENUM_STREAM");
-				}
-				else if(cb_page->cb_type == ENUM_MESSAGE_EXTRA)
-				{ // This is used in other clients for loading from disk whether an audio message has been heard/unheard
-					error_simple(0,"Checkpoint ENUM_MESSAGE_EXTRA");
-				}
-				else if(cb_page->cb_type == ENUM_MESSAGE_MORE)
-				{ // Triggers after we call message_load_more. Should be not need to be handled, but untested.
-					error_simple(0,"Checkpoint ENUM_MESSAGE_MORE");
-				}
-				else if(cb_page->cb_type == ENUM_UNKNOWN)
-				{
-					// currently N/A
-				}
-				torx_free((void**)&cb_page->cb_args->mem_charp_a);
-				torx_free((void**)&cb_page->cb_args->mem_charp_b);
-				torx_free((void**)&cb_page->cb_args->mem_ucharp);
-				torx_free((void**)&cb_page->cb_args->mem_intp_a);
-				torx_free((void**)&cb_page->cb_args->mem_intp_b);
-				torx_free((void**)&cb_page->cb_args);
-				torx_free((void**)&cb_page);
-			}
+		{ // One or more callbacks are ready, must drain the pipe and buffer then return -2
+			const int must_redraw_ui = drain_callbacks();
 			if(must_redraw_ui)
 				return must_redraw_ui;
 		}
@@ -5338,7 +5344,9 @@ int main(int argc, char **argv)
 	sigaction(SIGWINCH, &sa, NULL);
 
 	ui_initialize_language();
-	draw_login();
+	drain_callbacks(); // XXX initial() has already queued our saved settings; they must be applied before the first draw
+	if(running && !redraw) // A no-password profile can finish logging in this early, in which case ENUM_LOGIN already drew contacts
+		draw_login();
 	while(running)
 	{
 		if(resized)
