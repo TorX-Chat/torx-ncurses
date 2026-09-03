@@ -1207,7 +1207,7 @@ static int keypress(const int w, const wint_t ch)
 {
 	if(w >= (int)(torx_allocation_len(widget) / sizeof(struct widget)))
 	{ // Due to zero indexing, it will likely show "10 of 10" or higher which is indeed an error.
-		error_printf(0,"Keypress called on invalid widget: %d of %lu.",w,torx_allocation_len(widget) / sizeof(struct widget));
+		error_printf(0,"Keypress called on invalid widget: %d of %zu.",w,torx_allocation_len(widget) / sizeof(struct widget));
 		go_back(1);
 		return 0;
 	}
@@ -3148,7 +3148,7 @@ static void draw_scrollable(WINDOW *win,size_t *fyp,size_t *fxp,int *focus,size_
 				const wint_t online_char = get_online_char(sendfd_connected,recvfd_connected);
 				char *peernick = getter_string(n,INT_MIN,-1,offsetof(struct peer_list,peernick));
 				if(t_peer[n].unread > 0)
-					snprintf(label,sizeof(label),"%lc(%lu) %s",online_char,t_peer[n].unread,peernick);
+					snprintf(label,sizeof(label),"%lc(%zu) %s",online_char,t_peer[n].unread,peernick);
 				else
 					snprintf(label,sizeof(label),"%lc %s",online_char,peernick);
 				torx_free((void**)&peernick);
@@ -3911,9 +3911,9 @@ static int callback_contacts_groups(const int w)
 
 static char *torx_itoa(const size_t value)
 {
-	const size_t length = (size_t)snprintf(NULL, 0, "%lu", value);
+	const size_t length = (size_t)snprintf(NULL, 0, "%zu", value);
 	char *allocation = torx_insecure_malloc(length + 1);
-	snprintf(allocation,length + 1,"%lu",value);
+	snprintf(allocation,length + 1,"%zu",value);
 	return allocation;
 }
 
@@ -4095,13 +4095,13 @@ static void draw_contacts(void)
 
 	char label[256];
 	if(groups_mode == ENUM_SHOW_PEER && totalUnreadGroup)
-		snprintf(label,sizeof(label),"[ (%lu) %s ]",totalUnreadGroup,text_group);
+		snprintf(label,sizeof(label),"[ (%zu) %s ]",totalUnreadGroup,text_group);
 	else if(groups_mode == ENUM_SHOW_PEER)
 		snprintf(label,sizeof(label),"[ %s ]",text_group);
 	else if(groups_mode == ENUM_SHOW_GROUP)
 		snprintf(label,sizeof(label),"[ %s ]",text_block);
 	else if(groups_mode == ENUM_SHOW_BLOCK && totalUnreadPeer)
-		snprintf(label,sizeof(label),"[ (%lu) %s ]",totalUnreadPeer,text_peer);
+		snprintf(label,sizeof(label),"[ (%zu) %s ]",totalUnreadPeer,text_peer);
 	else if(groups_mode == ENUM_SHOW_BLOCK)
 		snprintf(label,sizeof(label),"[ %s ]",text_peer);
 	size_t utf8len = torx_utf8len(label);
@@ -4120,7 +4120,7 @@ static void draw_contacts(void)
 	fx = align_right(utf8len);
 	widget_button(win,&fy,&fx,utf8len,callback_generate,label);
 	if(totalIncoming)
-		snprintf(label,sizeof(label),"[ (%lu) %s ]",totalIncoming,text_requests);
+		snprintf(label,sizeof(label),"[ (%zu) %s ]",totalIncoming,text_requests);
 	else
 		snprintf(label,sizeof(label),"[ %s ]",text_requests);
 	utf8len = torx_utf8len(label);
@@ -4600,7 +4600,7 @@ static inline size_t print_message(WINDOW *win,const size_t top_line,const size_
 			}
 			if(*current_focus == w)
 				toggle_highlight(win); // highlight off
-		//	error_printf(0,"Checkpoint printed-lines: %lu out of anticipated: %lu into available: %lu in scrollable height: %lu chat_scroll_lines: %lu processed: %lu must-be: %lu msg: %s",lines,anticipated_lines,available_lines,height_of_scrollable,chat_scroll_lines,processed_lines,must_be_processed_lines,&message[offset]);
+		//	error_printf(0,"Checkpoint printed-lines: %zu out of anticipated: %zu into available: %zu in scrollable height: %zu chat_scroll_lines: %zu processed: %zu must-be: %zu msg: %s",lines,anticipated_lines,available_lines,height_of_scrollable,chat_scroll_lines,processed_lines,must_be_processed_lines,&message[offset]);
 		}
 		else // not actually printing
 			lines = anticipated_lines;
